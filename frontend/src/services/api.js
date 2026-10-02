@@ -1,9 +1,18 @@
 import axios from "axios";
 import { useAuthStore } from "../stores/auth";
 
+// VITE_EMBEDDED=true is set by backend/build-frontend.* when the build is
+// embedded into the Go binary (plain server or Wails). The page and the API
+// then share one origin, so a relative "/api" is correct. Otherwise keep the
+// development behaviour: VITE_API_URL if given, else http://localhost:8080.
+const API_BASE = import.meta.env.VITE_EMBEDDED === 'true'
+  ? '/api'
+  : import.meta.env.VITE_API_URL
+    ? `${import.meta.env.VITE_API_URL}/api`
+    : 'http://localhost:8080/api'
+
 const api = axios.create({
-  
-  baseURL: import.meta.env.VITE_API_URL ? `${import.meta.env.VITE_API_URL}/api` : 'http://localhost:8080/api',
+  baseURL: API_BASE,
   headers: {
     'Content-Type': 'application/json'
   }
