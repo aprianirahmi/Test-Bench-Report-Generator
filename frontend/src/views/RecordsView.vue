@@ -4,7 +4,7 @@ import { useRoute } from "vue-router";
 import api, { startOutput, stopOutput, fetchOpcData } from "../services/api";
 import { useValveStore } from "../stores/valve";
 import { useTheme } from "../composables/useTheme";
-import { DARK_CHART, LIGHT_CHART, hexToRgba } from "../utils/chartTheme";
+import { DARK_CHART, LIGHT_CHART } from "../utils/chartTheme";
 
 import AutoComplete from "primevue/autocomplete";
 import Button from "primevue/button";
@@ -40,9 +40,9 @@ const route = useRoute();
 const valveStore = useValveStore();
 const toast = useToast();
 const { isDark } = useTheme();
-// Chart.js draws on canvas and cannot read CSS variables, so the Rexroth
-// chart colours live in utils/chartTheme.js (light = one navy for every
-// signal, dark = cyan / ice).
+// Chart.js draws on canvas and cannot read CSS variables, so the axis and grid
+// colours live in utils/chartTheme.js. Line colours are the fixed per-signal
+// colours from the original design (not themed).
 const chartTheme = computed(() => (isDark.value ? DARK_CHART : LIGHT_CHART));
 
 const valve = computed(() => valveStore.selectedValve);
@@ -380,18 +380,15 @@ async function pollLiveData() {
   }
 }
 
-const fillAlpha = computed(() => (isDark.value ? 0.14 : 0.1));
-
 const pressureChartData = computed(() => {
-  const c = chartTheme.value.signal.pressure;
   return {
     labels: [...liveLabels.value],
     datasets: [
       {
         label: "Pressure (bar)",
         data: [...livePressure.value],
-        borderColor: c,
-        backgroundColor: hexToRgba(c, fillAlpha.value),
+        borderColor: "#00CCFF",
+        backgroundColor: "rgba(0, 204, 255, 0.12)",
         fill: true,
         tension: 0.35,
         pointRadius: 0,
@@ -402,15 +399,14 @@ const pressureChartData = computed(() => {
 });
 
 const flowChartData = computed(() => {
-  const c = chartTheme.value.signal.flow;
   return {
     labels: [...liveLabels.value],
     datasets: [
       {
         label: "Flow (L/min)",
         data: [...liveFlow.value],
-        borderColor: c,
-        backgroundColor: hexToRgba(c, fillAlpha.value),
+        borderColor: "#10b981",
+        backgroundColor: "rgba(16, 185, 129, 0.08)",
         fill: true,
         tension: 0.35,
         pointRadius: 0,
@@ -420,20 +416,16 @@ const flowChartData = computed(() => {
   };
 });
 
-// Command and Feedback share one chart. In light mode both signals are the
-// same navy, so Command is told apart by its dashes (same rule as the report).
+// Command and Feedback share one chart.
 const commandFeedbackChartData = computed(() => {
-  const cmd = chartTheme.value.signal.command;
-  const fb = chartTheme.value.signal.feedback;
   return {
     labels: [...liveLabels.value],
     datasets: [
       {
         label: "Command",
         data: [...liveCommand.value],
-        borderColor: cmd,
-        backgroundColor: hexToRgba(cmd, 0.08),
-        borderDash: [6, 4],
+        borderColor: "#f59e0b",
+        backgroundColor: "rgba(245, 158, 11, 0.08)",
         fill: false,
         tension: 0.35,
         pointRadius: 0,
@@ -442,8 +434,8 @@ const commandFeedbackChartData = computed(() => {
       {
         label: "Feedback",
         data: [...liveFeedback.value],
-        borderColor: fb,
-        backgroundColor: hexToRgba(fb, 0.08),
+        borderColor: "#8b5cf6",
+        backgroundColor: "rgba(139, 92, 246, 0.08)",
         fill: false,
         tension: 0.35,
         pointRadius: 0,
@@ -454,15 +446,14 @@ const commandFeedbackChartData = computed(() => {
 });
 
 const oilTempChartData = computed(() => {
-  const c = chartTheme.value.signal.temperature;
   return {
     labels: [...liveLabels.value],
     datasets: [
       {
         label: "Oil Temp (°C)",
         data: [...liveOilTemp.value],
-        borderColor: c,
-        backgroundColor: hexToRgba(c, fillAlpha.value),
+        borderColor: "#f97316",
+        backgroundColor: "rgba(249, 115, 22, 0.12)",
         fill: true,
         tension: 0.35,
         pointRadius: 0,
