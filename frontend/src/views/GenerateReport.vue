@@ -139,6 +139,23 @@ const flowVerification = computed(() => {
   return "Within Tolerance";
 });
 
+// Manual command inputs (Command 7 / 8, mA) typed in by the operator during the
+// run. Stored per sample as command_7 / command_8; there is no feedback for
+// them. Records saved before this existed have none, which shows as "-". One
+// value if it never changed, else the min-max range.
+function manualCommandText(key) {
+  const vals = parsedTelemetry.value
+    .map((d) => d[key])
+    .filter((v) => v !== null && v !== undefined && v !== "" && Number.isFinite(Number(v)))
+    .map(Number);
+  if (!vals.length) return "-";
+  const lo = Math.min(...vals);
+  const hi = Math.max(...vals);
+  return lo === hi ? `${lo} mA` : `${lo} \u2013 ${hi} mA`;
+}
+const manualCmd7Text = computed(() => manualCommandText("command_7"));
+const manualCmd8Text = computed(() => manualCommandText("command_8"));
+
 // Chart Bindings
 const hydraulicChartData = computed(() => {
   const data = parsedTelemetry.value;
@@ -171,31 +188,33 @@ const hydraulicChartData = computed(() => {
 
 const electricalChartData = computed(() => {
   const data = parsedTelemetry.value;
-  return {
-    labels: data.map((d) => d.time),
-    datasets: [
-      {
-        label: "Command",
-        data: data.map((d) => d.command),
-        borderColor: "#f59e0b",
-        backgroundColor: "rgba(245, 158, 11, 0.1)",
-        fill: true,
-        tension: 0.35,
-        pointRadius: 0,
-        borderWidth: 2,
-      },
-      {
-        label: "Feedback",
-        data: data.map((d) => d.feedback),
-        borderColor: "#8b5cf6",
-        backgroundColor: "rgba(139, 92, 246, 0.1)",
-        fill: true,
-        tension: 0.35,
-        pointRadius: 0,
-        borderWidth: 2,
-      },
-    ],
-  };
+  // Manual channels (7/8) record no feedback, so that line is left out.
+  const hasFeedback = data.some((d) => d.feedback !== null && d.feedback !== undefined);
+  const datasets = [
+    {
+      label: "Command",
+      data: data.map((d) => d.command),
+      borderColor: "#f59e0b",
+      backgroundColor: "rgba(245, 158, 11, 0.1)",
+      fill: true,
+      tension: 0.35,
+      pointRadius: 0,
+      borderWidth: 2,
+    },
+  ];
+  if (hasFeedback) {
+    datasets.push({
+      label: "Feedback",
+      data: data.map((d) => d.feedback),
+      borderColor: "#8b5cf6",
+      backgroundColor: "rgba(139, 92, 246, 0.1)",
+      fill: true,
+      tension: 0.35,
+      pointRadius: 0,
+      borderWidth: 2,
+    });
+  }
+  return { labels: data.map((d) => d.time), datasets };
 });
 
 const oilTempChartData = computed(() => {
@@ -404,6 +423,12 @@ onMounted(() => {
                 <td>{{ valve.size_ng }}</td>
                 <th>Unit Weight</th>
                 <td>{{ valve.weight }} kg</td>
+              </tr>
+              <tr>
+                <th>Manual Command 7</th>
+                <td>{{ manualCmd7Text }}</td>
+                <th>Manual Command 8</th>
+                <td>{{ manualCmd8Text }}</td>
               </tr>
             </tbody>
           </table>

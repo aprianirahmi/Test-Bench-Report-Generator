@@ -10,6 +10,7 @@ import AutoComplete from "primevue/autocomplete";
 import Button from "primevue/button";
 import Dialog from "primevue/dialog";
 import Dropdown from "primevue/dropdown";
+import InputNumber from "primevue/inputnumber";
 import { useToast } from "primevue/usetoast";
 import { Line } from "vue-chartjs";
 import {
@@ -78,8 +79,20 @@ const channelOptions = [
   { label: "Channel 4", value: 4 },
   { label: "Channel 5", value: 5 },
   { label: "Channel 6", value: 6 },
+  { label: "Channel 7 (manual)", value: 7 },
+  { label: "Channel 8 (manual)", value: 8 },
 ];
 const selectedChannel = ref(1);
+
+// Manual command inputs. Command 7 / Command 8 (0-1300 mA) are typed in by the
+// operator and are not read from OPC UA, so there is no feedback for these two
+// channels. Selecting Channel 7 or 8 plots the typed value as the Command line
+// (no Feedback line), and both values are stored on every recorded sample as
+// command_7 / command_8 (null while the field is empty).
+const MANUAL_MAX_MA = 1300;
+const manualCmd7 = ref(null);
+const manualCmd8 = ref(null);
+const isManualChannel = computed(() => selectedChannel.value >= 7);
 
 // --- Telemetry Graph Buffers ---
 let liveDataInterval = null;
@@ -301,9 +314,9 @@ function exportRecordedCSV() {
   if (!recordedSession.value.length) return;
   
   // Headers prioritize the primary recorded generic values mapping to the dropdown selection
-  const headers = "Timestamp,Selected_Pressure,Selected_Flow,Selected_Command,Selected_Feedback,Oil_Temp,P1,P2,F1,F2,Cmd1,Fb1,Cmd2,Fb2,Cmd3,Fb3,Cmd4,Fb4,Cmd5,Fb5,Cmd6,Fb6\n";
+  const headers = "Timestamp,Selected_Pressure,Selected_Flow,Selected_Command,Selected_Feedback,Oil_Temp,P1,P2,F1,F2,Cmd1,Fb1,Cmd2,Fb2,Cmd3,Fb3,Cmd4,Fb4,Cmd5,Fb5,Cmd6,Fb6,Cmd7_manual,Cmd8_manual\n";
   const rows = recordedSession.value
-    .map((r) => `${r.time},${r.pressure},${r.flow},${r.command},${r.feedback},${r.oil_temp},${r.pressure_1},${r.pressure_2},${r.flow_1},${r.flow_2},${r.command_1},${r.feedback_1},${r.command_2},${r.feedback_2},${r.command_3},${r.feedback_3},${r.command_4},${r.feedback_4},${r.command_5},${r.feedback_5},${r.command_6},${r.feedback_6}`)
+    .map((r) => `${r.time},${r.pressure},${r.flow},${r.command ?? ""},${r.feedback ?? ""},${r.oil_temp},${r.pressure_1},${r.pressure_2},${r.flow_1},${r.flow_2},${r.command_1},${r.feedback_1},${r.command_2},${r.feedback_2},${r.command_3},${r.feedback_3},${r.command_4},${r.feedback_4},${r.command_5},${r.feedback_5},${r.command_6},${r.feedback_6},${r.command_7 ?? ""},${r.command_8 ?? ""}`)
     .join("\n");
 
   const blob = new Blob([headers + rows], { type: "text/csv;charset=utf-8;" });
@@ -331,15 +344,18 @@ async function pollLiveData() {
 
   const pSelected = Number(d[pKey] ?? d.pressure ?? 0);
   const fSelected = Number(d[fKey] ?? d.flow ?? 0);
-  const cmdSelected = Number(d[`command_${ch}`] ?? d.command ?? 0);
-  const fbSelected = Number(d[`feedback_${ch}`] ?? d.feedback ?? 0);
+  // Channels 7/8 are manual: command = typed value, no feedback exists.
+  const isManual = ch >= 7;
+  const manualVal = ch === 7 ? manualCmd7.value : ch === 8 ? manualCmd8.value : null;
+  const cmdSelected = isManual ? (manualVal ?? null) : Number(d[`command_${ch}`] ?? d.command ?? 0);
+  const fbSelected = isManual ? null : Number(d[`feedback_${ch}`] ?? d.feedback ?? 0);
   const temp = Number(d.oil_temp ?? d.temperature ?? 0);
 
   // Update UI textual values
   currentValues.value.pressure = pSelected.toFixed(1);
   currentValues.value.flow = fSelected.toFixed(1);
-  currentValues.value.command = cmdSelected.toFixed(1);
-  currentValues.value.feedback = fbSelected.toFixed(1);
+  currentValues.value.command = cmdSelected === null ? "-" : cmdSelected.toFixed(1);
+  currentValues.value.feedback = fbSelected === null ? "-" : fbSelected.toFixed(1);
   currentValues.value.oil_temp = temp.toFixed(1);
 
   // Buffer for graphs
@@ -376,6 +392,9 @@ async function pollLiveData() {
       command_4: Number(d.command_4 ?? 0), feedback_4: Number(d.feedback_4 ?? 0),
       command_5: Number(d.command_5 ?? 0), feedback_5: Number(d.feedback_5 ?? 0),
       command_6: Number(d.command_6 ?? 0), feedback_6: Number(d.feedback_6 ?? 0),
+      // Manual commands: no feedback is recorded for these.
+      command_7: manualCmd7.value ?? null,
+      command_8: manualCmd8.value ?? null,
     });
   }
 }
@@ -418,31 +437,32 @@ const flowChartData = computed(() => {
 
 // Command and Feedback share one chart.
 const commandFeedbackChartData = computed(() => {
-  return {
-    labels: [...liveLabels.value],
-    datasets: [
-      {
-        label: "Command",
-        data: [...liveCommand.value],
-        borderColor: "#f59e0b",
-        backgroundColor: "rgba(245, 158, 11, 0.08)",
-        fill: false,
-        tension: 0.35,
-        pointRadius: 0,
-        borderWidth: 2,
-      },
-      {
-        label: "Feedback",
-        data: [...liveFeedback.value],
-        borderColor: "#8b5cf6",
-        backgroundColor: "rgba(139, 92, 246, 0.08)",
-        fill: false,
-        tension: 0.35,
-        pointRadius: 0,
-        borderWidth: 2,
-      },
-    ],
-  };
+  const datasets = [
+    {
+      label: "Command",
+      data: [...liveCommand.value],
+      borderColor: "#f59e0b",
+      backgroundColor: "rgba(245, 158, 11, 0.08)",
+      fill: false,
+      tension: 0.35,
+      pointRadius: 0,
+      borderWidth: 2,
+    },
+  ];
+  // Manual channels (7/8) have no feedback signal, so the line is left out.
+  if (!isManualChannel.value) {
+    datasets.push({
+      label: "Feedback",
+      data: [...liveFeedback.value],
+      borderColor: "#8b5cf6",
+      backgroundColor: "rgba(139, 92, 246, 0.08)",
+      fill: false,
+      tension: 0.35,
+      pointRadius: 0,
+      borderWidth: 2,
+    });
+  }
+  return { labels: [...liveLabels.value], datasets };
 });
 
 const oilTempChartData = computed(() => {
@@ -610,6 +630,44 @@ onBeforeUnmount(() => {
           />
         </section>
 
+        <!-- Manual Command Input: typed in by the operator, not read from OPC UA -->
+        <section class="panel manual-panel">
+          <header class="panel-header manual-header">
+            <h3>Manual Command Input</h3>
+            <span class="manual-range">0&ndash;{{ MANUAL_MAX_MA }} mA</span>
+          </header>
+          <div class="manual-body">
+            <div class="manual-field" :class="{ active: selectedChannel === 7 }">
+              <label for="manual-cmd7" class="info-label">Command 7</label>
+              <InputNumber
+                v-model="manualCmd7"
+                inputId="manual-cmd7"
+                :min="0"
+                :max="MANUAL_MAX_MA"
+                :maxFractionDigits="1"
+                :useGrouping="false"
+                suffix=" mA"
+                placeholder="0&ndash;1300 mA"
+                fluid
+              />
+            </div>
+            <div class="manual-field" :class="{ active: selectedChannel === 8 }">
+              <label for="manual-cmd8" class="info-label">Command 8</label>
+              <InputNumber
+                v-model="manualCmd8"
+                inputId="manual-cmd8"
+                :min="0"
+                :max="MANUAL_MAX_MA"
+                :maxFractionDigits="1"
+                :useGrouping="false"
+                suffix=" mA"
+                placeholder="0&ndash;1300 mA"
+                fluid
+              />
+            </div>
+          </div>
+        </section>
+
         <!-- Valve Preview -->
         <section class="panel picture-panel">
           <header class="panel-header">
@@ -679,7 +737,10 @@ onBeforeUnmount(() => {
       <!-- 3. Bottom-Center: Command vs Feedback -->
       <section class="panel graph-panel command-graph">
         <header class="panel-header">
-          <h3>Command vs Feedback</h3>
+          <h3>
+            Command vs Feedback
+            <span v-if="isManualChannel" class="manual-tag">Manual command &middot; no feedback</span>
+          </h3>
           <Dropdown v-model="selectedChannel" :options="channelOptions" optionLabel="label" optionValue="value" class="header-dropdown" />
         </header>
         <div class="chart-container">
@@ -1138,5 +1199,49 @@ onBeforeUnmount(() => {
   margin: 0;
   color: var(--text-muted);
   font-size: 0.88rem;
+}
+
+.manual-panel {
+  flex-shrink: 0;
+}
+.manual-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.manual-range {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+.manual-body {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.6rem;
+  padding: 0.55rem 0.75rem 0.7rem;
+}
+.manual-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+  padding: 0.25rem 0.35rem;
+  border-radius: 4px;
+  border: 1px solid transparent;
+}
+/* The command that is currently plotted in Command vs Feedback */
+.manual-field.active {
+  border-color: var(--rexroth-6);
+  background: rgba(0, 200, 247, 0.08);
+}
+.manual-field :deep(.p-inputnumber-input) {
+  width: 100%;
+  padding: 0.3rem 0.5rem;
+  font-size: 0.82rem;
+}
+.manual-tag {
+  margin-left: 0.5rem;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--text-muted);
 }
 </style>
