@@ -203,11 +203,50 @@ func GetOpcData(db *gorm.DB) gin.HandlerFunc {
 			return res.Results[0].Value.Value()
 		}
 
+		p1 := readNode(s.PressureNode1)
+		p2 := readNode(s.PressureNode2)
+		f1 := readNode(s.FlowNode1)
+		f2 := readNode(s.FlowNode2)
+
+		cmd1 := readNode(s.CommandNode1)
+		fb1 := readNode(s.FeedbackNode1)
+		cmd2 := readNode(s.CommandNode2)
+		fb2 := readNode(s.FeedbackNode2)
+		cmd3 := readNode(s.CommandNode3)
+		fb3 := readNode(s.FeedbackNode3)
+		cmd4 := readNode(s.CommandNode4)
+		fb4 := readNode(s.FeedbackNode4)
+		cmd5 := readNode(s.CommandNode5)
+		fb5 := readNode(s.FeedbackNode5)
+		cmd6 := readNode(s.CommandNode6)
+		fb6 := readNode(s.FeedbackNode6)
+
+		out := readNode(s.OutputTriggerNodeID)
+		hpu := readNode(s.HpuStatusNodeID)
+
 		c.JSON(http.StatusOK, gin.H{
-			"pressure": readNode(s.OpcNodePressure),
-			"command":  readNode(s.OpcNodeCommand),
-			"feedback": readNode(s.OpcNodeFeedback),
-			"flow":     readNode(s.OpcNodeFlow),
+			// Primary channel aliases
+			"pressure": p1,
+			"flow":     f1,
+			"command":  cmd1,
+			"feedback": fb1,
+
+			// Full Transducer Mapping
+			"pressure_1": p1,
+			"pressure_2": p2,
+			"flow_1":     f1,
+			"flow_2":     f2,
+
+			// Channels 1 - 6
+			"command_1": cmd1, "feedback_1": fb1,
+			"command_2": cmd2, "feedback_2": fb2,
+			"command_3": cmd3, "feedback_3": fb3,
+			"command_4": cmd4, "feedback_4": fb4,
+			"command_5": cmd5, "feedback_5": fb5,
+			"command_6": cmd6, "feedback_6": fb6,
+
+			"output":     out,
+			"hpu_active": hpu,
 		})
 	}
 }
@@ -216,7 +255,7 @@ func writeBoolNode(db *gorm.DB, value bool) error {
 	var s models.Settings
 	db.First(&s, 1)
 
-	if s.OpcNodeOutput == "" {
+	if s.OutputTriggerNodeID == "" {
 		return fmt.Errorf("output Node ID is not configured")
 	}
 
@@ -228,7 +267,7 @@ func writeBoolNode(db *gorm.DB, value bool) error {
 		return err
 	}
 
-	id, err := ua.ParseNodeID(s.OpcNodeOutput)
+	id, err := ua.ParseNodeID(s.OutputTriggerNodeID)
 	if err != nil {
 		return fmt.Errorf("invalid Output Node ID format")
 	}
@@ -331,11 +370,11 @@ func GetOpcStatus(db *gorm.DB) gin.HandlerFunc {
 			return gin.H{"connected": true, "value": val}
 		}
 
-		status["command"] = checkNode(s.OpcNodeCommand)
-		status["feedback"] = checkNode(s.OpcNodeFeedback)
-		status["pressure"] = checkNode(s.OpcNodePressure)
-		status["flow"] = checkNode(s.OpcNodeFlow)
-		status["output"] = checkNode(s.OpcNodeOutput)
+		status["command"] = checkNode(s.CommandNode1)
+		status["feedback"] = checkNode(s.FeedbackNode1)
+		status["pressure"] = checkNode(s.PressureNode1)
+		status["flow"] = checkNode(s.FlowNode1)
+		status["output"] = checkNode(s.OutputTriggerNodeID)
 
 		c.JSON(http.StatusOK, status)
 	}

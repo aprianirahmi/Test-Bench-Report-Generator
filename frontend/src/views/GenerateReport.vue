@@ -198,6 +198,25 @@ const electricalChartData = computed(() => {
   };
 });
 
+const oilTempChartData = computed(() => {
+  const data = parsedTelemetry.value;
+  return {
+    labels: data.map((d) => d.time),
+    datasets: [
+      {
+        label: "Oil Temp (°C)",
+        data: data.map((d) => d.oil_temp || 0), // Fallback to 0 if older records lack temperature
+        borderColor: "#f97316",
+        backgroundColor: "rgba(249, 115, 22, 0.1)",
+        fill: true,
+        tension: 0.35,
+        pointRadius: 0,
+        borderWidth: 2,
+      },
+    ],
+  };
+});   
+
 const chartOptions = {
   responsive: true,
   maintainAspectRatio: false,
@@ -450,28 +469,33 @@ onMounted(() => {
           </table>
         </section>
 
-        <!-- Performance Graphs (Compact Side-by-Side Grid) -->
-        <section class="graphs-section" v-if="parsedTelemetry.length > 0">
-          <h3>3. Dynamic Test Telemetry</h3>
-          <div class="graphs-grid">
-            <div class="graph-box">
-              <h4>Hydraulic Performance (Pressure & Flow)</h4>
-              <div class="chart-wrapper">
-                <Line :data="hydraulicChartData" :options="chartOptions" />
-              </div>
-            </div>
-            <div class="graph-box">
-              <h4>Electrical Response (Command vs Feedback)</h4>
-              <div class="chart-wrapper">
-                <Line :data="electricalChartData" :options="chartOptions" />
-              </div>
-            </div>
-          </div>
-        </section>
-        <div v-else class="empty-state">
-          Graphs will render automatically when a historical test session is
-          loaded.
-        </div>
+<!-- Performance Graphs (Compact 3-Column Grid) -->
+<section class="graphs-section" v-if="parsedTelemetry.length > 0">
+  <h3>3. Dynamic Test Telemetry</h3>
+  <div class="graphs-grid">
+    <div class="graph-box">
+      <h4>Hydraulic Performance</h4>
+      <div class="chart-wrapper">
+        <Line :data="hydraulicChartData" :options="chartOptions" />
+      </div>
+    </div>
+    <div class="graph-box">
+      <h4>Command vs Feedback</h4>
+      <div class="chart-wrapper">
+        <Line :data="electricalChartData" :options="chartOptions" />
+      </div>
+    </div>
+    <div class="graph-box">
+      <h4>Oil Temperature</h4>
+      <div class="chart-wrapper">
+        <Line :data="oilTempChartData" :options="chartOptions" />
+      </div>
+    </div>
+  </div>
+</section>
+<div v-else class="empty-state">
+  Graphs will render automatically when a historical test session is loaded.
+</div>
 
         <!-- Signatures -->
         <section class="signature-section">

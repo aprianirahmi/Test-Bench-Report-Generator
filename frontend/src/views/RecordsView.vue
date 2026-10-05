@@ -51,19 +51,44 @@ const isStarting = ref(false);
 const isStopping = ref(false);
 const recordedSession = ref([]);
 
-// Telemetry graph buffers
+// --- Telemetry Selection State ---
+const pressureOptions = [
+  { label: "Pressure 1", value: "pressure_1" },
+  { label: "Pressure 2", value: "pressure_2" },
+];
+const selectedPressure = ref("pressure_1");
+
+const flowOptions = [
+  { label: "Flow 1", value: "flow_1" },
+  { label: "Flow 2", value: "flow_2" },
+];
+const selectedFlow = ref("flow_1");
+
+const channelOptions = [
+  { label: "Channel 1", value: 1 },
+  { label: "Channel 2", value: 2 },
+  { label: "Channel 3", value: 3 },
+  { label: "Channel 4", value: 4 },
+  { label: "Channel 5", value: 5 },
+  { label: "Channel 6", value: 6 },
+];
+const selectedChannel = ref(1);
+
+// --- Telemetry Graph Buffers ---
 let liveDataInterval = null;
 const liveLabels = ref(Array(STEPS).fill(""));
 const livePressure = ref(Array(STEPS).fill(0));
 const liveFlow = ref(Array(STEPS).fill(0));
 const liveCommand = ref(Array(STEPS).fill(0));
 const liveFeedback = ref(Array(STEPS).fill(0));
+const liveOilTemp = ref(Array(STEPS).fill(0));
 
 const currentValues = ref({
   pressure: "0.0",
   flow: "0.0",
   command: "0.0",
   feedback: "0.0",
+  oil_temp: "0.0",
 });
 
 // --- Timed Recording & Modal State ---
@@ -80,7 +105,6 @@ const durationOptions = [
 ];
 const selectedDuration = ref(60);
 
-// Countdown
 const remainingSeconds = ref(0);
 let countdownInterval = null;
 
@@ -90,7 +114,6 @@ const formattedCountdown = computed(() => {
   return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 });
 
-// Slide to Confirm State
 const sliderTrackRef = ref(null);
 const slideOffset = ref(0);
 const isDragging = ref(false);
@@ -117,7 +140,7 @@ function onSlideStart(e) {
   const clientX = e.touches ? e.touches[0].clientX : e.clientX;
   startX = clientX - slideOffset.value;
   const trackWidth = sliderTrackRef.value.clientWidth;
-  maxSlide = trackWidth - 52; // 52px thumb width
+  maxSlide = trackWidth - 52;
 }
 
 function onSlideMove(e) {
@@ -128,7 +151,6 @@ function onSlideMove(e) {
   if (currentOffset > maxSlide) currentOffset = maxSlide;
   slideOffset.value = currentOffset;
 
-  // Trigger when dragged at least 90% across
   if (maxSlide > 0 && currentOffset >= maxSlide * 0.9) {
     isDragging.value = false;
     slideOffset.value = maxSlide;
@@ -196,7 +218,6 @@ async function stopRecordingSession(manual = false) {
       life: 3000,
     });
   } else {
-    // Show persistent completion modal
     recordFinishedDialog.value = true;
   }
 }
@@ -205,9 +226,7 @@ async function loadValves() {
   try {
     const response = await api.get("/valves");
     allValves.value = Array.isArray(response.data) ? response.data : [];
-  } catch (error) {
-    console.error("Failed to load valve list:", error);
-  }
+  } catch (error) {}
 }
 
 async function fetchValveById(id) {
@@ -215,15 +234,11 @@ async function fetchValveById(id) {
   try {
     const response = await api.get(`/valves/${id}`);
     valveStore.selectValve(response.data);
-  } catch (error) {
-    console.error("Failed to fetch valve:", error);
-  }
+  } catch (error) {}
 }
 
 function search(event) {
-  const q = String(event.query || "")
-    .trim()
-    .toLowerCase();
+  const q = String(event.query || "").trim().toLowerCase();
   suggestions.value = allValves.value.filter(
     (item) =>
       (item.part_number && item.part_number.toLowerCase().includes(q)) ||
@@ -252,19 +267,9 @@ async function startValve() {
   try {
     await startOutput();
     controlStatus.value = "active";
-    toast.add({
-      severity: "success",
-      summary: "HPU Active",
-      detail: "Output signal engaged.",
-      life: 3000,
-    });
+    toast.add({ severity: "success", summary: "HPU Active", detail: "Output signal engaged.", life: 3000 });
   } catch (error) {
-    toast.add({
-      severity: "error",
-      summary: "Start Failed",
-      detail: "Failed to engage HPU.",
-      life: 4000,
-    });
+    toast.add({ severity: "error", summary: "Start Failed", detail: "Failed to engage HPU.", life: 4000 });
   } finally {
     isStarting.value = false;
   }
@@ -277,19 +282,9 @@ async function stopValve() {
     await stopOutput();
     controlStatus.value = "stopped";
     if (isRecording.value) stopRecordingSession(true);
-    toast.add({
-      severity: "warn",
-      summary: "HPU Stopped",
-      detail: "Output signal disengaged.",
-      life: 3000,
-    });
+    toast.add({ severity: "warn", summary: "HPU Stopped", detail: "Output signal disengaged.", life: 3000 });
   } catch (error) {
-    toast.add({
-      severity: "error",
-      summary: "Stop Failed",
-      detail: "Failed to disengage HPU.",
-      life: 4000,
-    });
+    toast.add({ severity: "error", summary: "Stop Failed", detail: "Failed to disengage HPU.", life: 4000 });
   } finally {
     isStopping.value = false;
   }
@@ -297,19 +292,18 @@ async function stopValve() {
 
 function exportRecordedCSV() {
   if (!recordedSession.value.length) return;
-  const headers = "Timestamp,Pressure_bar,Flow_Lmin,Command,Feedback\n";
+  
+  // Headers prioritize the primary recorded generic values mapping to the dropdown selection
+  const headers = "Timestamp,Selected_Pressure,Selected_Flow,Selected_Command,Selected_Feedback,Oil_Temp,P1,P2,F1,F2,Cmd1,Fb1,Cmd2,Fb2,Cmd3,Fb3,Cmd4,Fb4,Cmd5,Fb5,Cmd6,Fb6\n";
   const rows = recordedSession.value
-    .map((r) => `${r.time},${r.pressure},${r.flow},${r.command},${r.feedback}`)
+    .map((r) => `${r.time},${r.pressure},${r.flow},${r.command},${r.feedback},${r.oil_temp},${r.pressure_1},${r.pressure_2},${r.flow_1},${r.flow_2},${r.command_1},${r.feedback_1},${r.command_2},${r.feedback_2},${r.command_3},${r.feedback_3},${r.command_4},${r.feedback_4},${r.command_5},${r.feedback_5},${r.command_6},${r.feedback_6}`)
     .join("\n");
 
   const blob = new Blob([headers + rows], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.setAttribute("href", url);
-  link.setAttribute(
-    "download",
-    `TestReport_${valve.value?.part_number || "Valve"}_${Date.now()}.csv`,
-  );
+  link.setAttribute("download", `ValveDAX_${valve.value?.part_number || "Valve"}_${Date.now()}.csv`);
   link.click();
 }
 
@@ -317,46 +311,64 @@ async function pollLiveData() {
   const now = new Date();
   const timeStr = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}:${String(now.getSeconds()).padStart(2, "0")}`;
 
-  let p = 0,
-    f = 0,
-    c = 0,
-    fb = 0;
+  let d = {};
   try {
     const res = await fetchOpcData();
-    const d = res.data;
-    p = d.pressure != null ? Number(d.pressure) : 0;
-    f = d.flow != null ? Number(d.flow) : 0;
-    c = d.command != null ? Number(d.command) : 0;
-    fb = d.feedback != null ? Number(d.feedback) : 0;
+    d = res.data || {};
   } catch (e) {}
 
-  currentValues.value.pressure = p.toFixed(1);
-  currentValues.value.flow = f.toFixed(1);
-  currentValues.value.command = c.toFixed(1);
-  currentValues.value.feedback = fb.toFixed(1);
+  // Determine which channels the user wants to view and record based on dropdowns
+  const pKey = selectedPressure.value;
+  const fKey = selectedFlow.value;
+  const ch = selectedChannel.value;
 
+  const pSelected = Number(d[pKey] ?? d.pressure ?? 0);
+  const fSelected = Number(d[fKey] ?? d.flow ?? 0);
+  const cmdSelected = Number(d[`command_${ch}`] ?? d.command ?? 0);
+  const fbSelected = Number(d[`feedback_${ch}`] ?? d.feedback ?? 0);
+  const temp = Number(d.oil_temp ?? d.temperature ?? 0);
+
+  // Update UI textual values
+  currentValues.value.pressure = pSelected.toFixed(1);
+  currentValues.value.flow = fSelected.toFixed(1);
+  currentValues.value.command = cmdSelected.toFixed(1);
+  currentValues.value.feedback = fbSelected.toFixed(1);
+  currentValues.value.oil_temp = temp.toFixed(1);
+
+  // Buffer for graphs
   liveLabels.value.shift();
   liveLabels.value.push(timeStr);
-
   livePressure.value.shift();
-  livePressure.value.push(p);
-
+  livePressure.value.push(pSelected);
   liveFlow.value.shift();
-  liveFlow.value.push(f);
-
+  liveFlow.value.push(fSelected);
   liveCommand.value.shift();
-  liveCommand.value.push(c);
-
+  liveCommand.value.push(cmdSelected);
   liveFeedback.value.shift();
-  liveFeedback.value.push(fb);
+  liveFeedback.value.push(fbSelected);
+  liveOilTemp.value.shift();
+  liveOilTemp.value.push(temp);
 
+  // If recording, log the explicitly selected channels into the generic fields 
+  // (so the report automatically reads the selected channels). Full mapping is also kept.
   if (isRecording.value) {
     recordedSession.value.push({
       time: timeStr,
-      pressure: p,
-      flow: f,
-      command: c,
-      feedback: fb,
+      pressure: pSelected, 
+      flow: fSelected,
+      command: cmdSelected,
+      feedback: fbSelected,
+      oil_temp: temp,
+      pressure_1: Number(d.pressure_1 ?? 0),
+      pressure_2: Number(d.pressure_2 ?? 0),
+      flow_1: Number(d.flow_1 ?? 0),
+      flow_2: Number(d.flow_2 ?? 0),
+      command_1: Number(d.command_1 ?? 0), feedback_1: Number(d.feedback_1 ?? 0),
+      command_2: Number(d.command_2 ?? 0), feedback_2: Number(d.feedback_2 ?? 0),
+      command_3: Number(d.command_3 ?? 0), feedback_3: Number(d.feedback_3 ?? 0),
+      command_4: Number(d.command_4 ?? 0), feedback_4: Number(d.feedback_4 ?? 0),
+      command_5: Number(d.command_5 ?? 0), feedback_5: Number(d.feedback_5 ?? 0),
+      command_6: Number(d.command_6 ?? 0), feedback_6: Number(d.feedback_6 ?? 0),
     });
   }
 }
@@ -393,15 +405,25 @@ const flowChartData = computed(() => ({
   ],
 }));
 
-const commandChartData = computed(() => ({
+const commandFeedbackChartData = computed(() => ({
   labels: [...liveLabels.value],
   datasets: [
     {
       label: "Command",
       data: [...liveCommand.value],
       borderColor: "#f59e0b",
-      backgroundColor: "rgba(245, 158, 11, 0.12)",
-      fill: true,
+      backgroundColor: "rgba(245, 158, 11, 0.08)",
+      fill: false,
+      tension: 0.35,
+      pointRadius: 0,
+      borderWidth: 2,
+    },
+    {
+      label: "Feedback",
+      data: [...liveFeedback.value],
+      borderColor: "#8b5cf6",
+      backgroundColor: "rgba(139, 92, 246, 0.08)",
+      fill: false,
       tension: 0.35,
       pointRadius: 0,
       borderWidth: 2,
@@ -409,14 +431,14 @@ const commandChartData = computed(() => ({
   ],
 }));
 
-const feedbackChartData = computed(() => ({
+const oilTempChartData = computed(() => ({
   labels: [...liveLabels.value],
   datasets: [
     {
-      label: "Feedback",
-      data: [...liveFeedback.value],
-      borderColor: "#8b5cf6",
-      backgroundColor: "rgba(139, 92, 246, 0.12)",
+      label: "Oil Temp (°C)",
+      data: [...liveOilTemp.value],
+      borderColor: "#f97316",
+      backgroundColor: "rgba(249, 115, 22, 0.12)",
       fill: true,
       tension: 0.35,
       pointRadius: 0,
@@ -434,12 +456,7 @@ const chartOptions = {
     legend: {
       display: true,
       position: "bottom",
-      labels: {
-        boxWidth: 8,
-        usePointStyle: true,
-        padding: 6,
-        font: { size: 9 },
-      },
+      labels: { boxWidth: 8, usePointStyle: true, padding: 6, font: { size: 9 } },
     },
     tooltip: { enabled: true },
   },
@@ -498,17 +515,18 @@ onBeforeUnmount(() => {
           placeholder="Select Valve for Testing..."
           class="valve-search"
           @complete="search"
-          @item-select="onSelect" />
+          @item-select="onSelect"
+        />
         <Button
           label="Load"
           icon="pi pi-check"
           :disabled="!pendingValve"
-          @click="confirmShow" />
+          @click="confirmShow"
+        />
       </div>
 
       <!-- Real-time Status & Telemetry Bar -->
       <div class="live-values-section">
-        <!-- Live Countdown Indicator if Recording -->
         <div v-if="isRecording" class="recording-badge pulse">
           <i class="pi pi-circle-fill"></i>
           <span>REC: {{ formattedCountdown }}</span>
@@ -528,15 +546,15 @@ onBeforeUnmount(() => {
         </div>
         <div class="live-value-item">
           <span class="label">Pressure</span>
-          <span class="value"
-            >{{ currentValues.pressure }} <small>bar</small></span
-          >
+          <span class="value">{{ currentValues.pressure }} <small>bar</small></span>
         </div>
         <div class="live-value-item">
           <span class="label">Flow</span>
-          <span class="value"
-            >{{ currentValues.flow }} <small>L/min</small></span
-          >
+          <span class="value">{{ currentValues.flow }} <small>L/min</small></span>
+        </div>
+        <div class="live-value-item">
+          <span class="label">Oil Temp</span>
+          <span class="value">{{ currentValues.oil_temp }} <small>°C</small></span>
         </div>
       </div>
     </div>
@@ -552,7 +570,8 @@ onBeforeUnmount(() => {
             class="ctrl-btn"
             :loading="isStarting"
             :disabled="!valve || isStarting || controlStatus === 'active'"
-            @click="startValve" />
+            @click="startValve"
+          />
           <Button
             label="Stop"
             icon="pi pi-power-off"
@@ -560,14 +579,16 @@ onBeforeUnmount(() => {
             class="ctrl-btn"
             :loading="isStopping"
             :disabled="!valve || isStopping || controlStatus === 'stopped'"
-            @click="stopValve" />
+            @click="stopValve"
+          />
           <Button
             :label="isRecording ? formattedCountdown : 'Rec'"
             :icon="isRecording ? 'pi pi-stop-circle' : 'pi pi-circle-fill'"
             :severity="isRecording ? 'warn' : 'secondary'"
             class="ctrl-btn"
             :disabled="!valve"
-            @click="handleRecButtonClick" />
+            @click="handleRecButtonClick"
+          />
         </section>
 
         <!-- Valve Preview -->
@@ -576,11 +597,7 @@ onBeforeUnmount(() => {
             <h3>Valve Preview</h3>
           </header>
           <div class="picture-content">
-            <img
-              v-if="imageUrl"
-              :src="imageUrl"
-              class="valve-image"
-              alt="Valve Preview" />
+            <img v-if="imageUrl" :src="imageUrl" class="valve-image" alt="Valve Preview" />
             <div v-else class="image-placeholder">
               <i class="pi pi-image"></i>
               <span>{{ valve ? "No Image Uploaded" : "No Valve Loaded" }}</span>
@@ -596,10 +613,7 @@ onBeforeUnmount(() => {
           </div>
           <div class="info-row">
             <span class="info-label">Series / Type</span>
-            <span class="info-val">
-              {{ valve?.component_series || "-" }} /
-              {{ valve?.valve_type || "-" }}
-            </span>
+            <span class="info-val">{{ valve?.component_series || "-" }} / {{ valve?.valve_type || "-" }}</span>
           </div>
           <div class="info-row">
             <span class="info-label">Rated Flow</span>
@@ -609,45 +623,58 @@ onBeforeUnmount(() => {
             <span class="info-label">Max Pressure</span>
             <span class="info-val">{{ valve?.max_pressure ?? "-" }} bar</span>
           </div>
-          <div
-            v-if="recordedSession.length > 0 && !isRecording"
-            class="export-block">
+          <div v-if="recordedSession.length > 0 && !isRecording" class="export-block">
             <Button
               label="Export CSV"
               icon="pi pi-download"
               severity="help"
               class="export-btn"
-              @click="exportRecordedCSV" />
+              @click="exportRecordedCSV"
+            />
           </div>
         </section>
       </div>
 
-      <!-- Graph Matrix -->
+      <!-- 1. Top-Center: Pressure -->
       <section class="panel graph-panel pressure-graph">
-        <header class="panel-header"><h3>Pressure Response</h3></header>
+        <header class="panel-header">
+          <h3>Pressure</h3>
+          <Dropdown v-model="selectedPressure" :options="pressureOptions" optionLabel="label" optionValue="value" class="header-dropdown" />
+        </header>
         <div class="chart-container">
           <Line :data="pressureChartData" :options="chartOptions" />
         </div>
       </section>
 
-      <section class="panel graph-panel command-graph">
-        <header class="panel-header"><h3>Command Input</h3></header>
-        <div class="chart-container">
-          <Line :data="commandChartData" :options="chartOptions" />
-        </div>
-      </section>
-
+      <!-- 2. Top-Right: Flow -->
       <section class="panel graph-panel flow-graph">
-        <header class="panel-header"><h3>Flow Response</h3></header>
+        <header class="panel-header">
+          <h3>Flow</h3>
+          <Dropdown v-model="selectedFlow" :options="flowOptions" optionLabel="label" optionValue="value" class="header-dropdown" />
+        </header>
         <div class="chart-container">
           <Line :data="flowChartData" :options="chartOptions" />
         </div>
       </section>
 
-      <section class="panel graph-panel feedback-graph">
-        <header class="panel-header"><h3>Position Feedback</h3></header>
+      <!-- 3. Bottom-Center: Command vs Feedback -->
+      <section class="panel graph-panel command-graph">
+        <header class="panel-header">
+          <h3>Command vs Feedback</h3>
+          <Dropdown v-model="selectedChannel" :options="channelOptions" optionLabel="label" optionValue="value" class="header-dropdown" />
+        </header>
         <div class="chart-container">
-          <Line :data="feedbackChartData" :options="chartOptions" />
+          <Line :data="commandFeedbackChartData" :options="chartOptions" />
+        </div>
+      </section>
+
+      <!-- 4. Bottom-Right: Oil Temperature -->
+      <section class="panel graph-panel temp-graph">
+        <header class="panel-header">
+          <h3>Oil Temperature</h3>
+        </header>
+        <div class="chart-container">
+          <Line :data="oilTempChartData" :options="chartOptions" />
         </div>
       </section>
     </div>
@@ -658,7 +685,8 @@ onBeforeUnmount(() => {
       @update:visible="recordConfigDialog = $event"
       header="Configure Recording Timer"
       :modal="true"
-      :style="{ width: '28rem' }">
+      :style="{ width: '28rem' }"
+    >
       <div class="rec-config-body">
         <div class="field">
           <label>Target Duration</label>
@@ -667,20 +695,20 @@ onBeforeUnmount(() => {
             :options="durationOptions"
             optionLabel="label"
             optionValue="value"
-            class="w-full" />
+            class="w-full"
+          />
         </div>
 
         <div class="slide-confirm-container">
           <div ref="sliderTrackRef" class="slider-track">
-            <div
-              class="slider-fill"
-              :style="{ width: `${slideOffset + 26}px` }"></div>
+            <div class="slider-fill" :style="{ width: `${slideOffset + 26}px` }"></div>
             <span class="slider-text">Slide to Start Recording &rarr;</span>
             <div
               class="slider-thumb"
               :style="{ transform: `translateX(${slideOffset}px)` }"
               @mousedown="onSlideStart"
-              @touchstart="onSlideStart">
+              @touchstart="onSlideStart"
+            >
               <i class="pi pi-angle-double-right"></i>
             </div>
           </div>
@@ -695,7 +723,8 @@ onBeforeUnmount(() => {
       header="Recording Session Completed"
       :modal="true"
       :closable="false"
-      :style="{ width: '26rem' }">
+      :style="{ width: '26rem' }"
+    >
       <div class="finished-modal-content">
         <i class="pi pi-check-circle success-icon"></i>
         <h4>Telemetry Logging Complete</h4>
@@ -709,7 +738,8 @@ onBeforeUnmount(() => {
           label="OK"
           icon="pi pi-check"
           class="w-full"
-          @click="recordFinishedDialog = false" />
+          @click="recordFinishedDialog = false"
+        />
       </template>
     </Dialog>
   </div>
@@ -770,12 +800,8 @@ onBeforeUnmount(() => {
   animation: pulse 1s infinite alternate;
 }
 @keyframes pulse {
-  from {
-    opacity: 0.2;
-  }
-  to {
-    opacity: 1;
-  }
+  from { opacity: 0.2; }
+  to { opacity: 1; }
 }
 .hpu-badge {
   display: flex;
@@ -819,6 +845,7 @@ onBeforeUnmount(() => {
   font-family: Consolas, Monaco, monospace;
   font-variant-numeric: tabular-nums;
 }
+
 .wireframe-grid {
   flex: 1;
   min-height: 0;
@@ -827,7 +854,7 @@ onBeforeUnmount(() => {
   grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
   grid-template-areas:
     "sidebar pressure flow"
-    "sidebar command feedback";
+    "sidebar command temp";
   gap: 0.85rem;
 }
 .sidebar-column {
@@ -904,18 +931,10 @@ onBeforeUnmount(() => {
 .export-btn {
   width: 100%;
 }
-.pressure-graph {
-  grid-area: pressure;
-}
-.flow-graph {
-  grid-area: flow;
-}
-.command-graph {
-  grid-area: command;
-}
-.feedback-graph {
-  grid-area: feedback;
-}
+.pressure-graph { grid-area: pressure; }
+.flow-graph { grid-area: flow; }
+.command-graph { grid-area: command; }
+.temp-graph { grid-area: temp; }
 .graph-panel {
   display: flex;
   flex-direction: column;
@@ -931,16 +950,36 @@ onBeforeUnmount(() => {
   border: 1px solid var(--border-color);
   border-radius: 6px;
 }
+
+/* Panel Header modified to accept flex dropdown controls */
 .panel-header {
-  padding: 0.4rem 0.75rem;
+  padding: 0.35rem 0.75rem;
   background: rgba(148, 163, 184, 0.05);
   border-bottom: 1px solid var(--border-color);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
 }
 .panel-header h3 {
   margin: 0;
   font-size: 0.85rem;
   font-weight: 600;
   color: var(--text-color);
+}
+.header-dropdown {
+  height: 28px;
+  display: flex;
+  align-items: center;
+  min-width: 120px;
+}
+.header-dropdown :deep(.p-dropdown-label) {
+  padding: 0 0.5rem;
+  font-size: 0.75rem;
+  display: flex;
+  align-items: center;
+}
+.header-dropdown :deep(.p-dropdown-trigger) {
+  width: 28px;
 }
 .w-full {
   width: 100%;
