@@ -241,13 +241,15 @@ function goToReport() {
     color 0.2s ease;
 }
 
+/* Hover inverts the icon: the circle fills with the primary colour and the
+   icon takes the opposite one so it stays visible.
+   Light: navy fill + cyan icon. Dark: cyan fill + navy icon (white on cyan
+   is only about 1.9:1). */
 .action-card:hover .icon-wrapper {
   background: var(--primary-color);
-  color: #001524;
+  color: var(--rexroth-6);
 }
 
-/* Dark mode: the hover fill is cyan, so the icon must be navy (white on
-   cyan is only about 1.9:1). */
 .p-dark .action-card:hover .icon-wrapper {
   color: var(--rexroth-3);
 }
