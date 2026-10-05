@@ -1,64 +1,107 @@
 /* ============================================================
-   Valve Database App — Bosch Rexroth Theme
+   Valve Database App — color theme
+   Repainted to the Bosch Rexroth / ISA-101 high-performance HMI
+   palette: muted, low-saturation backgrounds and status colors,
+   with color reserved for genuine abnormal conditions (alarms) —
+   not for routine "everything is fine" indicators. See the color
+   reference sheet delivered alongside this change for the full
+   swatch + hex + usage table.
    ============================================================ */
 :root {
-  /* --- Bosch Rexroth Core Palette --- */
-  --rexroth-prussian-blue: #002B49;
-  --rexroth-monza-red: #DF0024;
-  --rexroth-cyan: #00CCFF;
-  --rexroth-smalt-blue: #43545f;
-  --rexroth-casper: #A3BAC8;
+  /* --- Bosch Rexroth base palette --- */
+  --rexroth-1: #A3BAC8;
+  --rexroth-2: #506E81;
+  --rexroth-3: #002B49;
+  --rexroth-4: #ED0007;
+  --rexroth-5: #91F0FF;
+  --rexroth-6: #00C8F7;
 
-  /* ==========================================================
-     LIGHT THEME (Default)
-     ========================================================== */
-  --bg-color: #8a9297; /* Very light cool gray/blue for app background */
-  --card-bg: #BBBEC0; /* Clean white cards */
-  
-  --text-color: var(--rexroth-prussian-blue); /* Dark blue text for high readability */
-  --text-muted: var(--rexroth-smalt-blue);
-  --border-color: var(--rexroth-casper);
-  
-  /* Navigation (Sidebar & Topbar) */
-  --sidebar-bg: var(--rexroth-prussian-blue); 
-  --sidebar-text: var(--rexroth-casper);
+  /* --- ISA-101 semantic tokens --- */
+  /* Light surfaces = white mixed with steel #A3BAC8 (45 / 30 / 12 %) */
+  --bg-main: #D6E0E6;
+  --bg-panel: #C8D6DE;
+  --bg-card: #F4F7F8;
+
+  --bosch-blue: #002B49;
+  --bosch-blue-2: #506E81;
+
+  --normal: #6F7A80;
+  --stopped: #A3BAC8;
+  --out-of-service: #C9CED1;
+
+  --alarm-high: #ED0007;
+  --alarm-medium: #FF8C00;
+  --alarm-warning: #FFD000;
+
+  --info: #00C8F7;
+
+  --text-primary: var(--rexroth-3); /* navy */
+  --text-secondary: #3C5D73; /* slate mixed with navy 25 % */
+
+  /* --- Trend chart roles (RecordsView) --- */
+  --trend-actual: var(--bosch-blue);
+  --trend-setpoint: var(--info);
+  --trend-warning-limit: var(--alarm-warning);
+  --trend-alarm-limit: var(--alarm-high);
+
+  /* --- Legacy variable names kept so existing components need no
+     changes — all aliased onto the ISA-101 tokens above. Sidebar/
+     topbar map onto the Navigation/Header roles (Top Header +
+     Navigation Active), not onto a plain white theme. --- */
+  --bg-color: var(--bg-main);
+  --sidebar-bg: var(--bosch-blue);
+  --sidebar-text: var(--stopped);
   --sidebar-text-active: #FFFFFF;
-  --sidebar-active-bg: var(--rexroth-smalt-blue);
-  --topbar-bg: var(--rexroth-prussian-blue);
+  --sidebar-active-bg: color-mix(in srgb, var(--rexroth-6) 22%, var(--rexroth-3));
+  --topbar-bg: var(--bosch-blue);
+  --card-bg: var(--bg-card);
+  --text-color: var(--text-primary);
+  --text-color-secondary: var(--text-secondary);
+  --text-muted: var(--text-secondary);
+  --border-color: var(--stopped);
+  --primary-color: var(--rexroth-3);
 
-  /* Accents & Status */
-  --primary-color: var(--rexroth-prussian-blue);
-  --danger-color: var(--rexroth-monza-red);
-  --info-color: var(--rexroth-cyan);
+  /* --- Aliases for variable names introduced by the upstream
+     (Hanif) theme, so his views keep working. Values are the
+     palette colours above — no off-palette greys. --- */
+  --rexroth-prussian-blue: var(--rexroth-3);
+  --rexroth-smalt-blue: var(--rexroth-2);
+  --rexroth-casper: var(--rexroth-1);
+  --rexroth-cyan: var(--rexroth-6);
+  --rexroth-monza-red: var(--rexroth-4);
+  --danger-color: var(--rexroth-4);
+  --info-color: var(--rexroth-6);
 }
 
+/* Dark mode — Bosch Rexroth palette only.
+   Built from the six --rexroth-* colours above and mixes of them:
+   navy #002B49 for page/sidebar/topbar, cards/panels/borders are navy
+   mixed with slate #506E81 (18 / 30 / 55 %), text is white / steel
+   #A3BAC8, accents are cyan #00C8F7 and ice #91F0FF, red #ED0007 only
+   for alarms. Keep in sync with ./theme/tfiPreset.js, which maps the same
+   values onto PrimeVue's own tokens (Card, DataTable, Button, inputs…).
+
+   Deliberately scoped to the legacy chrome variables only (--bg-color,
+   --card-bg, --text-color(-secondary), --text-muted, --border-color,
+   --primary-color) — NOT the raw --text-primary/--text-secondary/--stopped/
+   --alarm-high/--info tokens, since LoginView still consumes those
+   directly against a hardcoded white background. */
 .p-dark {
-  /* ==========================================================
-     DARK THEME (Adjusted to Bosch Rexroth Palette)
-     ========================================================== */
-  --bg-color: #001524; /* Deepened Prussian blue for outer background */
-  --card-bg: #002038; /* Slightly lighter Prussian blue for cards */
-  
-  --text-color: #F4F7F9; /* Off-white text */
-  --text-muted: var(--rexroth-casper); /* Casper blue for muted text */
-  --border-color: var(--rexroth-smalt-blue);
-  
-  /* Navigation (Sidebar & Topbar) */
-  --sidebar-bg: #001B2E; /* Blends into dark background */
-  --sidebar-text: var(--rexroth-casper);
-  --sidebar-text-active: var(--rexroth-cyan); /* Cyan pops beautifully on dark blue */
-  --sidebar-active-bg: var(--rexroth-prussian-blue);
-  --topbar-bg: #001B2E;
-
-  /* Accents & Status */
-  --primary-color: var(--rexroth-cyan);
-  --danger-color: var(--rexroth-monza-red);
-  --info-color: var(--rexroth-cyan);
+  --bg-color: var(--rexroth-3);
+  --sidebar-bg: var(--rexroth-3);
+  --sidebar-text: var(--rexroth-1);
+  --sidebar-text-active: #FFFFFF;
+  --sidebar-active-bg: color-mix(in srgb, var(--rexroth-6) 22%, var(--rexroth-3));
+  --topbar-bg: var(--rexroth-3);
+  --card-bg: #0E3753;
+  --text-color: #FFFFFF;
+  --text-color-secondary: var(--rexroth-1);
+  --text-muted: var(--rexroth-1);
+  --border-color: #2C5068;
+  --primary-color: var(--rexroth-6);
+  /* Chart.js can't read CSS variables; mirrored in utils/chartTheme.js */
 }
 
-/* ============================================================
-   Base Element Resets
-   ============================================================ */
 * {
   box-sizing: border-box;
 }
@@ -84,7 +127,8 @@ html, body, #app {
   object-fit: contain;
 }
 
-/* Smooth transitions for theme switching on main structural classes */
+/* Smooth transitions for theme switching on main structural classes
+   (from upstream) */
 .card, .dashboard-card, .kpi-card, .settings-card, .panel, .search-toolbar {
   transition: background-color 0.3s ease, border-color 0.3s ease;
 }

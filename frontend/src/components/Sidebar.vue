@@ -140,6 +140,12 @@ function handleLogout() {
   color: var(--sidebar-text-active);
   font-weight: 600;
 }
+.menu-item.active {
+  box-shadow: inset 3px 0 0 var(--rexroth-6);
+}
+.menu-item.active i {
+  color: var(--rexroth-6);
+}
 .toggle-icon {
   margin-left: auto;
   transition: transform 0.2s;

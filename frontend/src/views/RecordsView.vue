@@ -3,6 +3,8 @@ import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useRoute } from "vue-router";
 import api, { startOutput, stopOutput, fetchOpcData } from "../services/api";
 import { useValveStore } from "../stores/valve";
+import { useTheme } from "../composables/useTheme";
+import { DARK_CHART, LIGHT_CHART, hexToRgba } from "../utils/chartTheme";
 
 import AutoComplete from "primevue/autocomplete";
 import Button from "primevue/button";
@@ -37,6 +39,11 @@ const STEPS = 40;
 const route = useRoute();
 const valveStore = useValveStore();
 const toast = useToast();
+const { isDark } = useTheme();
+// Chart.js draws on canvas and cannot read CSS variables, so the Rexroth
+// chart colours live in utils/chartTheme.js (light = one navy for every
+// signal, dark = cyan / ice).
+const chartTheme = computed(() => (isDark.value ? DARK_CHART : LIGHT_CHART));
 
 const valve = computed(() => valveStore.selectedValve);
 
@@ -373,108 +380,129 @@ async function pollLiveData() {
   }
 }
 
-const pressureChartData = computed(() => ({
-  labels: [...liveLabels.value],
-  datasets: [
-    {
-      label: "Pressure (bar)",
-      data: [...livePressure.value],
-      borderColor: "#00CCFF",
-      backgroundColor: "rgba(0, 204, 255, 0.12)",
-      fill: true,
-      tension: 0.35,
-      pointRadius: 0,
-      borderWidth: 2,
-    },
-  ],
-}));
+const fillAlpha = computed(() => (isDark.value ? 0.14 : 0.1));
 
-const flowChartData = computed(() => ({
-  labels: [...liveLabels.value],
-  datasets: [
-    {
-      label: "Flow (L/min)",
-      data: [...liveFlow.value],
-      borderColor: "#10b981",
-      backgroundColor: "rgba(16, 185, 129, 0.08)",
-      fill: true,
-      tension: 0.35,
-      pointRadius: 0,
-      borderWidth: 2,
-    },
-  ],
-}));
+const pressureChartData = computed(() => {
+  const c = chartTheme.value.signal.pressure;
+  return {
+    labels: [...liveLabels.value],
+    datasets: [
+      {
+        label: "Pressure (bar)",
+        data: [...livePressure.value],
+        borderColor: c,
+        backgroundColor: hexToRgba(c, fillAlpha.value),
+        fill: true,
+        tension: 0.35,
+        pointRadius: 0,
+        borderWidth: 2,
+      },
+    ],
+  };
+});
 
-const commandFeedbackChartData = computed(() => ({
-  labels: [...liveLabels.value],
-  datasets: [
-    {
-      label: "Command",
-      data: [...liveCommand.value],
-      borderColor: "#f59e0b",
-      backgroundColor: "rgba(245, 158, 11, 0.08)",
-      fill: false,
-      tension: 0.35,
-      pointRadius: 0,
-      borderWidth: 2,
-    },
-    {
-      label: "Feedback",
-      data: [...liveFeedback.value],
-      borderColor: "#8b5cf6",
-      backgroundColor: "rgba(139, 92, 246, 0.08)",
-      fill: false,
-      tension: 0.35,
-      pointRadius: 0,
-      borderWidth: 2,
-    },
-  ],
-}));
+const flowChartData = computed(() => {
+  const c = chartTheme.value.signal.flow;
+  return {
+    labels: [...liveLabels.value],
+    datasets: [
+      {
+        label: "Flow (L/min)",
+        data: [...liveFlow.value],
+        borderColor: c,
+        backgroundColor: hexToRgba(c, fillAlpha.value),
+        fill: true,
+        tension: 0.35,
+        pointRadius: 0,
+        borderWidth: 2,
+      },
+    ],
+  };
+});
 
-const oilTempChartData = computed(() => ({
-  labels: [...liveLabels.value],
-  datasets: [
-    {
-      label: "Oil Temp (°C)",
-      data: [...liveOilTemp.value],
-      borderColor: "#f97316",
-      backgroundColor: "rgba(249, 115, 22, 0.12)",
-      fill: true,
-      tension: 0.35,
-      pointRadius: 0,
-      borderWidth: 2,
-    },
-  ],
-}));
+// Command and Feedback share one chart. In light mode both signals are the
+// same navy, so Command is told apart by its dashes (same rule as the report).
+const commandFeedbackChartData = computed(() => {
+  const cmd = chartTheme.value.signal.command;
+  const fb = chartTheme.value.signal.feedback;
+  return {
+    labels: [...liveLabels.value],
+    datasets: [
+      {
+        label: "Command",
+        data: [...liveCommand.value],
+        borderColor: cmd,
+        backgroundColor: hexToRgba(cmd, 0.08),
+        borderDash: [6, 4],
+        fill: false,
+        tension: 0.35,
+        pointRadius: 0,
+        borderWidth: 2,
+      },
+      {
+        label: "Feedback",
+        data: [...liveFeedback.value],
+        borderColor: fb,
+        backgroundColor: hexToRgba(fb, 0.08),
+        fill: false,
+        tension: 0.35,
+        pointRadius: 0,
+        borderWidth: 2,
+      },
+    ],
+  };
+});
 
-const chartOptions = {
-  responsive: true,
-  maintainAspectRatio: false,
-  animation: { duration: 0 },
-  interaction: { intersect: false, mode: "index" },
-  plugins: {
-    legend: {
-      display: true,
-      position: "bottom",
-      labels: { boxWidth: 8, usePointStyle: true, padding: 6, font: { size: 9 } },
+const oilTempChartData = computed(() => {
+  const c = chartTheme.value.signal.temperature;
+  return {
+    labels: [...liveLabels.value],
+    datasets: [
+      {
+        label: "Oil Temp (°C)",
+        data: [...liveOilTemp.value],
+        borderColor: c,
+        backgroundColor: hexToRgba(c, fillAlpha.value),
+        fill: true,
+        tension: 0.35,
+        pointRadius: 0,
+        borderWidth: 2,
+      },
+    ],
+  };
+});
+
+const chartOptions = computed(() => {
+  const axisColor = chartTheme.value.axis;
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: { duration: 0 },
+    interaction: { intersect: false, mode: "index" },
+    plugins: {
+      legend: {
+        display: true,
+        position: "bottom",
+        labels: { color: axisColor, boxWidth: 10, boxHeight: 3, usePointStyle: true, padding: 6, font: { size: 9 } },
+      },
+      tooltip: { enabled: true },
     },
-    tooltip: { enabled: true },
-  },
-  scales: {
-    x: {
-      display: true,
-      type: "category",
-      grid: { display: false },
-      ticks: { color: "#64748b", font: { size: 9 }, maxTicksLimit: 6 },
+    scales: {
+      x: {
+        display: true,
+        type: "category",
+        grid: { display: false },
+        ticks: { color: axisColor, font: { size: 9 }, maxTicksLimit: 6 },
+      },
+      y: {
+        beginAtZero: true,
+        border: { display: false },
+        grid: { color: chartTheme.value.grid },
+        ticks: { color: axisColor, font: { size: 9 } },
+      },
     },
-    y: {
-      beginAtZero: true,
-      border: { display: false },
-      grid: { color: "rgba(148, 163, 184, 0.12)" },
-      ticks: { color: "#64748b", font: { size: 9 } },
-    },
-  },
-};
+  };
+});
 
 const imageUrl = computed(() => {
   if (!valve.value?.image_path) return null;
@@ -567,7 +595,7 @@ onBeforeUnmount(() => {
             label="Start"
             icon="pi pi-play"
             severity="success"
-            class="ctrl-btn"
+            class="ctrl-btn start-btn"
             :loading="isStarting"
             :disabled="!valve || isStarting || controlStatus === 'active'"
             @click="startValve"
@@ -792,9 +820,9 @@ onBeforeUnmount(() => {
   font-size: 0.75rem;
   font-weight: 700;
   font-family: Consolas, Monaco, monospace;
-  background: rgba(239, 68, 68, 0.18);
-  color: #ef4444;
-  border: 1px solid #ef4444;
+  background: rgba(237, 0, 7, 0.14);
+  color: #ed0007;
+  border: 1px solid #ed0007;
 }
 .recording-badge.pulse i {
   animation: pulse 1s infinite alternate;
@@ -813,13 +841,49 @@ onBeforeUnmount(() => {
   font-weight: 700;
   font-family: Consolas, Monaco, monospace;
 }
+/* Status badges: Rexroth palette. Cyan/teal = running, red = stopped */
 .hpu-badge.active {
-  background: rgba(16, 185, 129, 0.15);
-  color: #10b981;
+  background: rgba(0, 200, 247, 0.16);
+  color: #007aa0;
 }
 .hpu-badge.stopped {
-  background: rgba(239, 68, 68, 0.15);
-  color: #ef4444;
+  background: rgba(237, 0, 7, 0.1);
+  color: #be090f;
+}
+.p-dark .hpu-badge.active {
+  background: rgba(0, 200, 247, 0.18);
+  color: #91f0ff;
+}
+.p-dark .hpu-badge.stopped {
+  background: rgba(237, 0, 7, 0.22);
+  color: #ff6a6e;
+}
+
+/* Start is the only green button in the app. Every other button
+   follows the Rexroth palette (see theme/tfiPreset.js). */
+.start-btn {
+  --p-button-success-background: #10b981;
+  --p-button-success-hover-background: #059669;
+  --p-button-success-active-background: #047857;
+  --p-button-success-border-color: #10b981;
+  --p-button-success-hover-border-color: #059669;
+  --p-button-success-active-border-color: #047857;
+  --p-button-success-color: #ffffff;
+  --p-button-success-hover-color: #ffffff;
+  --p-button-success-active-color: #ffffff;
+  --p-button-success-focus-ring-color: #10b981;
+}
+.p-dark .start-btn {
+  --p-button-success-background: #34d399;
+  --p-button-success-hover-background: #6ee7b7;
+  --p-button-success-active-background: #6ee7b7;
+  --p-button-success-border-color: #34d399;
+  --p-button-success-hover-border-color: #6ee7b7;
+  --p-button-success-active-border-color: #6ee7b7;
+  --p-button-success-color: #002b49;
+  --p-button-success-hover-color: #002b49;
+  --p-button-success-active-color: #002b49;
+  --p-button-success-focus-ring-color: #34d399;
 }
 .pulse-dot {
   width: 6px;
@@ -1071,7 +1135,7 @@ onBeforeUnmount(() => {
 }
 .success-icon {
   font-size: 3.2rem;
-  color: #10b981;
+  color: #00c8f7;
   margin-bottom: 0.5rem;
 }
 .finished-modal-content h4 {

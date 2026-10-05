@@ -323,8 +323,8 @@ watch(
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #10b981;
-  box-shadow: 0 0 8px rgba(16, 185, 129, 0.4);
+  background: var(--rexroth-6);
+  box-shadow: 0 0 8px rgba(0, 200, 247, 0.45);
 }
 
 /* Empty State */
@@ -442,7 +442,7 @@ watch(
 }
 
 .p-dark .badge-brand {
-  color: #001524;
+  color: var(--rexroth-3);
 }
 
 .overview-actions {

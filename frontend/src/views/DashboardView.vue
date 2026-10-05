@@ -246,6 +246,12 @@ function goToReport() {
   color: #001524;
 }
 
+/* Dark mode: the hover fill is cyan, so the icon must be navy (white on
+   cyan is only about 1.9:1). */
+.p-dark .action-card:hover .icon-wrapper {
+  color: var(--rexroth-3);
+}
+
 .icon-wrapper i {
   font-size: 1.75rem;
 }

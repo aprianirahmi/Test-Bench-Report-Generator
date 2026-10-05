@@ -14,12 +14,15 @@ function applyTheme() {
 }
 
 function initTheme() {
+  // Default is always light mode unless the user has explicitly toggled
+  // dark mode before (and it's still remembered in this browser). We do
+  // NOT fall back to the OS/browser prefers-color-scheme setting here —
+  // that made the app open in dark mode on any machine whose Windows/
+  // Chrome theme is set to dark, even for a user who never touched the
+  // toggle. Light stays the true first-run default; toggling dark still
+  // persists across reloads as before.
   const saved = localStorage.getItem('theme')
-  if (saved) {
-    isDark.value = saved === 'dark'
-  } else {
-    isDark.value = window.matchMedia('(prefers-color-scheme: dark)').matches
-  }
+  isDark.value = saved === 'dark'
   applyTheme()
 }
 

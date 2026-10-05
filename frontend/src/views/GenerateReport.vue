@@ -148,8 +148,8 @@ const hydraulicChartData = computed(() => {
       {
         label: "Pressure (bar)",
         data: data.map((d) => d.pressure),
-        borderColor: "#00CCFF",
-        backgroundColor: "rgba(0, 204, 255, 0.1)",
+        borderColor: "#002B49",
+        backgroundColor: "rgba(0, 43, 73, 0.08)",
         fill: true,
         tension: 0.35,
         pointRadius: 0,
@@ -158,9 +158,10 @@ const hydraulicChartData = computed(() => {
       {
         label: "Flow (L/min)",
         data: data.map((d) => d.flow),
-        borderColor: "#10b981",
-        backgroundColor: "rgba(16, 185, 129, 0.1)",
-        fill: true,
+        borderColor: "#002B49",
+        borderDash: [6, 4],
+        backgroundColor: "rgba(0, 43, 73, 0)",
+        fill: false,
         tension: 0.35,
         pointRadius: 0,
         borderWidth: 2,
@@ -177,9 +178,10 @@ const electricalChartData = computed(() => {
       {
         label: "Command",
         data: data.map((d) => d.command),
-        borderColor: "#f59e0b",
-        backgroundColor: "rgba(245, 158, 11, 0.1)",
-        fill: true,
+        borderColor: "#002B49",
+        borderDash: [6, 4],
+        backgroundColor: "rgba(0, 43, 73, 0)",
+        fill: false,
         tension: 0.35,
         pointRadius: 0,
         borderWidth: 2,
@@ -187,8 +189,8 @@ const electricalChartData = computed(() => {
       {
         label: "Feedback",
         data: data.map((d) => d.feedback),
-        borderColor: "#8b5cf6",
-        backgroundColor: "rgba(139, 92, 246, 0.1)",
+        borderColor: "#002B49",
+        backgroundColor: "rgba(0, 43, 73, 0.08)",
         fill: true,
         tension: 0.35,
         pointRadius: 0,
@@ -206,8 +208,8 @@ const oilTempChartData = computed(() => {
       {
         label: "Oil Temp (°C)",
         data: data.map((d) => d.oil_temp || 0), // Fallback to 0 if older records lack temperature
-        borderColor: "#f97316",
-        backgroundColor: "rgba(249, 115, 22, 0.1)",
+        borderColor: "#002B49",
+        backgroundColor: "rgba(0, 43, 73, 0.08)",
         fill: true,
         tension: 0.35,
         pointRadius: 0,
@@ -222,8 +224,8 @@ const chartOptions = {
   maintainAspectRatio: false,
   animation: false,
   plugins: {
-    legend: { position: "bottom", labels: { boxWidth: 10, font: { size: 9 } } },
-    tooltip: { enabled: false },
+    legend: { position: "bottom", labels: { usePointStyle: false, boxWidth: 28, boxHeight: 3, font: { size: 9 } } },
+    tooltip: { enabled: false }, 
   },
   scales: {
     x: {
@@ -569,8 +571,8 @@ onMounted(() => {
 }
 
 .valve-summary-card {
-  background: rgba(16, 185, 129, 0.08);
-  border: 1px solid #10b981;
+  background: rgba(0, 200, 247, 0.08);
+  border: 1px solid #00c8f7;
   padding: 0.75rem;
   border-radius: 4px;
   display: flex;
@@ -578,7 +580,7 @@ onMounted(() => {
   gap: 0.2rem;
 }
 .valve-summary-card strong {
-  color: #10b981;
+  color: var(--text-color);
   font-size: 0.9rem;
 }
 .valve-summary-card span {

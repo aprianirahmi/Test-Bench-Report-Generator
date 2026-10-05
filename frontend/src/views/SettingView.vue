@@ -415,9 +415,9 @@ onBeforeUnmount(() => {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
-  background: rgba(239, 68, 68, 0.12);
-  border: 1px solid rgba(239, 68, 68, 0.35);
-  color: #ef4444;
+  background: rgba(237, 0, 7, 0.12);
+  border: 1px solid rgba(237, 0, 7, 0.35);
+  color: #ed0007;
   padding: 0.25rem 0.65rem;
   border-radius: 9999px;
   font-size: 0.75rem;
@@ -425,9 +425,9 @@ onBeforeUnmount(() => {
 }
 
 .connection-status-pill.connected {
-  background: rgba(16, 185, 129, 0.12);
-  border-color: rgba(16, 185, 129, 0.35);
-  color: #10b981;
+  background: rgba(0, 200, 247, 0.12);
+  border-color: rgba(0, 200, 247, 0.35);
+  color: #00c8f7;
 }
 
 .status-dot {
@@ -560,11 +560,11 @@ onBeforeUnmount(() => {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #ef4444;
+  background: #ed0007;
 }
 
 .live-dot.ok {
-  background: #10b981;
+  background: #00c8f7;
 }
 
 .node-input-row {
