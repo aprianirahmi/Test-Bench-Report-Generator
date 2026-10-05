@@ -39,37 +39,35 @@ Vite. Cek juga: refresh di `/valves`, dan `/api/ping`.
 Mode pengembangan sehari-hari tidak berubah: Air di satu terminal,
 `npm run dev` di terminal lain.
 
-## Membuat shell Wails (dijalankan sendiri)
+## Shell Wails (`desktop/`)
 
-1. Pasang CLI dan cek prasyarat:
-   ```
-   go install github.com/wailsapp/wails/v2/cmd/wails@latest
-   wails doctor
-   ```
-2. Dari folder utama proyek:
-   ```
-   wails init -n valve-database-desktop -t vanilla -d desktop
-   ```
-3. Di `desktop/go.mod` tambahkan:
-   ```
-   require valve_database v0.0.0
-   replace valve_database => ../backend
-   ```
-   lalu `go mod tidy` di `desktop/`.
-4. Hapus `desktop/frontend/` bawaan template. Di `desktop/main.go`, sketsa
-   (nama field persis harus dicocokkan dengan versi Wails yang terpasang):
-   ```go
-   distFS, _ := fs.Sub(assets.Frontend, "frontend_dist")
-   router, cleanup, err := server.New(distFS)
-   // ...
-   wails.Run(&options.App{
-       Title:      "Valve Database",
-       AssetServer: &assetserver.Options{Handler: router},
-       OnShutdown: func(ctx context.Context) { cleanup() },
-   })
-   ```
-5. `backend\build-frontend.bat`, lalu `cd desktop && wails build`. Hasilnya satu
-   `.exe` di `desktop/build/bin/`.
+Dibuat dengan `wails init -n valve-database-desktop -t vanilla -d desktop`
+(Wails v2.16.0), lalu `go.mod`, `main.go`, dan `wails.json` diganti.
+`app.go` dan isi `frontend/` bawaan template dihapus karena tidak dipakai;
+folder `frontend/` sendiri dibiarkan kosong (lihat langkah build).
+
+- Modul bernama `valve_database/desktop` (bukan `valve-database-desktop`).
+  Go hanya mengizinkan paket di bawah path `valve_database/` mengimpor
+  `valve_database/internal/...`; nama modul lain ditolak compiler.
+- `go.mod` memakai `replace valve_database => ../backend`.
+- `main.go` memindahkan folder kerja ke folder `.exe`, lalu memanggil
+  `server.New(distFS)` dan menyerahkan router Gin sebagai
+  `AssetServer.Handler`. Tidak ada port TCP yang dibuka.
+- `wails.json` tanpa perintah frontend. Frontend dibangun oleh
+  `backend\build-frontend.bat`, bukan oleh Wails.
+
+Build dan uji:
+
+1. `backend\build-frontend.bat`
+2. `cd desktop`, lalu `go mod tidy`
+3. `wails build -s -skipbindings`. `-s` melewati build frontend, dan
+   `-skipbindings` melewati pembuatan binding (tanpa itu Wails menjalankan
+   binary sementara yang ikut menjalankan `server.New` dan membuat
+   `data.db` di folder Temp). Folder `desktop\frontend\` harus ada
+   (hanya berisi `.gitkeep`), karena Wails memeriksanya walaupun frontend
+   dilewati.
+4. Hasil: `desktop\build\bin\ValveDatabase.exe`. Taruh `.env` (dan
+   `data.db` bila ingin data yang ada) di folder yang sama dengan `.exe`.
 
 ## Perlu diputuskan
 
