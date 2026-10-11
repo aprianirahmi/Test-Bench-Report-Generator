@@ -222,6 +222,9 @@ func detectMimeType(fileHeader *multipart.FileHeader) (string, error) {
 	return http.DetectContentType(buffer), nil
 }
 
+// SaveTestRecord stores one recorded session. New clients send either
+// test_mode "repair_job" with repair_job_id, or test_mode "manual" with no
+// reference. A bare valve_id (older clients) is still accepted.
 func SaveTestRecord(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var record models.TestRecord
@@ -229,6 +232,50 @@ func SaveTestRecord(db *gorm.DB) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
+		record.ID = 0
+		record.Valve = nil
+		record.RepairJob = nil
+
+		switch record.TestMode {
+		case models.TestModeRepairJob:
+			if record.RepairJobID == nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "repair_job_id is required for a repair job test"})
+				return
+			}
+			var job models.RepairJob
+			if err := db.First(&job, *record.RepairJobID).Error; err == gorm.ErrRecordNotFound {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "repair job not found"})
+				return
+			} else if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+			record.ValveID = nil
+		case models.TestModeManual:
+			record.ValveID = nil
+			record.RepairJobID = nil
+		case "":
+			// Older clients: a record linked to a Valve List entry.
+			if record.ValveID == nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "test_mode is required"})
+				return
+			}
+			var v models.Valve
+			if err := db.First(&v, *record.ValveID).Error; err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "valve not found"})
+				return
+			}
+			record.RepairJobID = nil
+		default:
+			c.JSON(http.StatusBadRequest, gin.H{"error": "unknown test_mode"})
+			return
+		}
+
+		if strings.TrimSpace(record.DataPayload) == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "data_payload is empty"})
+			return
+		}
+
 		if err := db.Create(&record).Error; err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -240,7 +287,7 @@ func SaveTestRecord(db *gorm.DB) gin.HandlerFunc {
 func GetTestRecords(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var records []models.TestRecord
-		if err := db.Preload("Valve").Order("created_at desc").Find(&records).Error; err != nil {
+		if err := db.Preload("Valve").Preload("RepairJob").Order("created_at desc").Find(&records).Error; err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}

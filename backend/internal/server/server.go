@@ -81,6 +81,15 @@ func New(distFS fs.FS) (*gin.Engine, func(), error) {
 		api.POST("/valves/:id/image", middleware.AuthRequired(), middleware.AdminOnly(), controllers.UploadValveImage(db))
 		api.POST("/valves/:id/datasheet", middleware.AuthRequired(), middleware.AdminOnly(), controllers.UploadValveDatasheet(db))
 
+		// Repair Jobs: any logged-in user can add and edit, only admin deletes.
+		api.GET("/repair-jobs", middleware.AuthRequired(), controllers.GetRepairJobs(db))
+		api.GET("/repair-jobs/:id", middleware.AuthRequired(), controllers.GetRepairJobByID(db))
+		api.POST("/repair-jobs", middleware.AuthRequired(), controllers.CreateRepairJob(db))
+		api.PUT("/repair-jobs/:id", middleware.AuthRequired(), controllers.UpdateRepairJob(db))
+		api.DELETE("/repair-jobs/:id", middleware.AuthRequired(), middleware.AdminOnly(), controllers.DeleteRepairJob(db))
+		api.POST("/repair-jobs/:id/image", middleware.AuthRequired(), controllers.UploadRepairJobImage(db))
+		api.POST("/repair-jobs/:id/datasheet", middleware.AuthRequired(), controllers.UploadRepairJobDatasheet(db))
+
 		// Test Records & Telemetry Logs
 		api.GET("/records", middleware.AuthRequired(), controllers.GetTestRecords(db))
 		api.POST("/records", middleware.AuthRequired(), controllers.SaveTestRecord(db))
@@ -92,6 +101,7 @@ func New(distFS fs.FS) (*gin.Engine, func(), error) {
 		// OPC UA Telemetry & Actuation
 		api.GET("/opcua/data", middleware.AuthRequired(), controllers.GetOpcData(db))
 		api.GET("/opcua/status", middleware.AuthRequired(), controllers.GetOpcStatus(db))
+		api.GET("/opcua/sensors", middleware.AuthRequired(), controllers.GetSensorCatalog(db))
 		api.POST("/ctrlx/start", middleware.AuthRequired(), controllers.StartOutput(db))
 		api.POST("/ctrlx/stop", middleware.AuthRequired(), controllers.StopOutput(db))
 	}

@@ -224,7 +224,7 @@ func GetOpcData(db *gorm.DB) gin.HandlerFunc {
 		out := readNode(s.OutputTriggerNodeID)
 		hpu := readNode(s.HpuStatusNodeID)
 
-		c.JSON(http.StatusOK, gin.H{
+		resp := gin.H{
 			// Primary channel aliases
 			"pressure": p1,
 			"flow":     f1,
@@ -247,7 +247,14 @@ func GetOpcData(db *gorm.DB) gin.HandlerFunc {
 
 			"output":     out,
 			"hpu_active": hpu,
-		})
+		}
+
+		// User-defined sensors from Settings, keyed custom_1, custom_2, ...
+		for _, n := range parseCustomNodes(s.CustomNodes) {
+			resp[n.Key] = readNode(n.NodeID)
+		}
+
+		c.JSON(http.StatusOK, resp)
 	}
 }
 

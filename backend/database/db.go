@@ -35,8 +35,10 @@ func ConnectDB() *gorm.DB {
 		sqlDB.SetConnMaxLifetime(1 * time.Hour)
 	}
 
-	// AutoMigrate now includes TestRecord
-	if err = db.AutoMigrate(&models.Valve{}, &models.User{}, &models.Settings{}, &models.TestRecord{}); err != nil {
+	// RepairJob must be migrated before TestRecord, which references it.
+	// TestRecord.valve_id changed from NOT NULL to nullable (manual tests have
+	// no valve); AutoMigrate rebuilds that table once, keeping its rows.
+	if err = db.AutoMigrate(&models.Valve{}, &models.User{}, &models.Settings{}, &models.RepairJob{}, &models.TestRecord{}); err != nil {
 		log.Fatalf("Table migration failed: %v", err)
 	}
 
@@ -109,4 +111,4 @@ func seedUser(db *gorm.DB, username, plainPassword, role string) {
 		Role:     role,
 	}
 	db.Create(&newUser)
-}
+}

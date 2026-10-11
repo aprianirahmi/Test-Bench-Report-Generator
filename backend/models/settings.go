@@ -30,4 +30,19 @@ type Settings struct {
 	FeedbackNode5 string `json:"feedback_node_5"`
 	CommandNode6  string `json:"command_node_6"`
 	FeedbackNode6 string `json:"feedback_node_6"`
+
+	// User-defined extra sensors/variables, edited from the Settings page.
+	// Stored as a JSON array of CustomNode so a sensor can be added, renamed
+	// or removed without a schema change.
+	CustomNodes string `json:"custom_nodes" gorm:"type:text"`
 }
+
+// CustomNode is one user-defined sensor. Key is assigned once ("custom_1",
+// "custom_2", ...) and never changes, so recorded data stays attached to the
+// sensor when its Label is renamed.
+type CustomNode struct {
+	Key    string `json:"key"`
+	Label  string `json:"label"`
+	Unit   string `json:"unit"`
+	NodeID string `json:"node_id"`
+}
