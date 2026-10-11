@@ -230,6 +230,66 @@
             </div>
           </div>
         </section>
+
+        <!-- Custom sensors / variables: added and renamed from here -->
+        <section class="panel-card custom-card">
+          <div class="card-title custom-title">
+            <i class="pi pi-plus-circle"></i>
+            <span>Custom Sensors &amp; Variables</span>
+            <Button
+              label="Add Sensor"
+              icon="pi pi-plus"
+              size="small"
+              text
+              class="add-sensor-btn"
+              @click="addCustomNode"
+            />
+          </div>
+
+          <div v-if="customNodes.length" class="custom-header">
+            <span class="col-lbl">Name</span>
+            <span class="col-lbl">Unit</span>
+            <span class="col-lbl">OPC UA Node ID</span>
+            <span class="col-lbl"></span>
+          </div>
+
+          <div v-for="(n, i) in customNodes" :key="n.key" class="custom-row">
+            <InputText
+              v-model="n.label"
+              :placeholder="`Sensor ${i + 1}`"
+              class="p-inputtext-sm"
+              :aria-label="`Name of ${n.key}`"
+            />
+            <InputText v-model="n.unit" placeholder="bar, °C ..." class="p-inputtext-sm" :aria-label="`Unit of ${n.key}`" />
+            <div class="node-input-row">
+              <div class="live-pill mini">{{ liveValues[n.key] ?? '-' }}</div>
+              <InputText
+                v-model="n.node_id"
+                placeholder="ns=2;s=testbench/sensors/..."
+                class="p-inputtext-sm node-input"
+                :aria-label="`Node ID of ${n.key}`"
+              />
+            </div>
+            <Button
+              icon="pi pi-trash"
+              severity="danger"
+              text
+              rounded
+              size="small"
+              :title="`Remove ${n.label || n.key}`"
+              @click="removeCustomNode(i)"
+            />
+          </div>
+
+          <p v-if="!customNodes.length" class="custom-empty">
+            No custom sensors yet. Add one to record an extra signal (for example oil temperature or pilot pressure)
+            and select it as a chart axis in the Test Workspace.
+          </p>
+          <p class="custom-hint">
+            Changes apply after <strong>Save Settings</strong>. Renaming keeps the recorded data; removing a sensor stops
+            recording it, but existing records keep their values.
+          </p>
+        </section>
       </div>
     </div>
   </div>
@@ -264,6 +324,39 @@ const liveValues = reactive({
   command_6: "-", feedback_6: "-",
 })
 
+// Custom sensors, edited as a list and stored as JSON in settings.custom_nodes.
+// Each key (custom_1, custom_2, ...) is assigned once and never reused, so
+// renaming a sensor keeps its recorded data attached.
+const customNodes = ref([])
+
+function parseCustomNodes(raw) {
+  try {
+    const list = JSON.parse(raw || "[]")
+    return Array.isArray(list)
+      ? list
+          .filter((n) => n && /^custom_\d+$/.test(n.key))
+          .map((n) => ({ key: n.key, label: n.label || "", unit: n.unit || "", node_id: n.node_id || "" }))
+      : []
+  } catch (e) {
+    return []
+  }
+}
+
+function addCustomNode() {
+  const used = customNodes.value.map((n) => Number(n.key.split("_")[1]) || 0)
+  const next = Math.max(0, highestCustomKey.value, ...used) + 1
+  highestCustomKey.value = next
+  customNodes.value.push({ key: `custom_${next}`, label: "", unit: "", node_id: "" })
+}
+
+function removeCustomNode(i) {
+  customNodes.value.splice(i, 1)
+}
+
+// Highest key ever seen in this session, so a removed key is not handed out
+// again before the page is reloaded.
+const highestCustomKey = ref(0)
+
 const settings = reactive({
   opc_endpoint: "opc.tcp://127.0.0.1:4840",
   opc_username: "",
@@ -283,6 +376,7 @@ const settings = reactive({
   command_node_4: "", feedback_node_4: "",
   command_node_5: "", feedback_node_5: "",
   command_node_6: "", feedback_node_6: "",
+  custom_nodes: "[]",
 })
 
 function isLiveNode(key) {
@@ -308,6 +402,11 @@ async function pollLiveTelemetry() {
         liveValues[`feedback_${ch}`] = d[`feedback_${ch}`] != null ? Number(d[`feedback_${ch}`]).toFixed(1) : "-"
       }
 
+      for (const n of customNodes.value) {
+        const v = d[n.key]
+        liveValues[n.key] = v != null && Number.isFinite(Number(v)) ? Number(v).toFixed(1) : v != null ? String(v) : "-"
+      }
+
       liveValues.output_trigger = d.output != null ? (d.output ? "TRUE" : "FALSE") : "-"
       liveValues.hpu_status = d.hpu_active != null ? (d.hpu_active ? "ACTIVE" : "OFF") : "-"
     }
@@ -319,6 +418,8 @@ async function fetchSettings() {
     const res = await api.get("/settings")
     if (res.data) {
       Object.assign(settings, res.data)
+      customNodes.value = parseCustomNodes(res.data.custom_nodes)
+      highestCustomKey.value = Math.max(0, ...customNodes.value.map((n) => Number(n.key.split("_")[1]) || 0))
       if (!settings.pressure_node_1 && res.data.pressure_node_id) {
         settings.pressure_node_1 = res.data.pressure_node_id
       }
@@ -342,7 +443,16 @@ async function fetchSettings() {
 async function saveSettings() {
   isSaving.value = true
   try {
-    await api.put("/settings", settings)
+    settings.custom_nodes = JSON.stringify(
+      customNodes.value.map((n) => ({
+        key: n.key,
+        label: n.label.trim() || n.key,
+        unit: n.unit.trim(),
+        node_id: n.node_id.trim(),
+      })),
+    )
+    const res = await api.put("/settings", settings)
+    if (res?.data?.custom_nodes !== undefined) customNodes.value = parseCustomNodes(res.data.custom_nodes)
     toast.add({
       severity: "success",
       summary: "Settings Saved",
@@ -706,4 +816,37 @@ onBeforeUnmount(() => {
     flex-direction: column;
   }
 }
-</style>
+/* Custom sensors */
+.custom-title {
+  justify-content: flex-start;
+}
+.add-sensor-btn {
+  margin-left: auto;
+  padding: 0.15rem 0.5rem;
+  font-size: 0.75rem;
+}
+.custom-header,
+.custom-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) 5.5rem minmax(0, 2fr) 2rem;
+  gap: 0.45rem;
+  align-items: center;
+}
+.custom-header .col-lbl {
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+.custom-row :deep(.p-inputtext) {
+  width: 100%;
+  min-width: 0;
+}
+.custom-empty,
+.custom-hint {
+  margin: 0;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+</style>

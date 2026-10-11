@@ -59,12 +59,6 @@ function openDatasheet() {
   window.open(datasheetUrl.value, "_blank", "noopener")
 }
 
-function goToRecords() {
-  if (valve.value) {
-    router.push({ name: 'records', params: { id: valve.value.id } })
-  }
-}
-
 const imageUrl = computed(() => {
   if (!valve.value?.image_path) return null
   if (valve.value.image_path.startsWith("http")) return valve.value.image_path
@@ -180,12 +174,6 @@ watch(
             class="action-btn"
             :disabled="!datasheetUrl"
             @click="openDatasheet"
-          />
-          <Button
-            label="Open in Test Workspace"
-            icon="pi pi-chart-line"
-            class="action-btn"
-            @click="goToRecords"
           />
         </div>
       </section>
@@ -552,4 +540,4 @@ watch(
     overflow-y: visible;
   }
 }
-</style>
+</style>

@@ -58,6 +58,27 @@ export function uploadValveDatasheet(id, file) {
   });
 }
 
+export function uploadRepairJobImage(id, file) {
+  const formData = new FormData();
+  formData.append("image", file);
+  return api.post(`/repair-jobs/${id}/image`, formData, {
+    headers: { "Content-Type": undefined },
+  });
+}
+
+export function uploadRepairJobDatasheet(id, file) {
+  const formData = new FormData();
+  formData.append("datasheet", file);
+  return api.post(`/repair-jobs/${id}/datasheet`, formData, {
+    headers: { "Content-Type": undefined },
+  });
+}
+
+// User-defined sensors (key, label, unit) from Settings, for any logged-in user.
+export function fetchSensorCatalog() {
+  return api.get("/opcua/sensors");
+}
+
 export function startOutput() {
   return api.post("/ctrlx/start");
 }

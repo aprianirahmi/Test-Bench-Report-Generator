@@ -1,18 +1,29 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
-import api, { startOutput, stopOutput, fetchOpcData } from "../services/api";
-import { useValveStore } from "../stores/valve";
+import api, { startOutput, stopOutput, fetchOpcData, fetchSensorCatalog } from "../services/api";
+import { useRepairJobStore } from "../stores/repairJob";
 import { useTheme } from "../composables/useTheme";
 import { DARK_CHART, LIGHT_CHART } from "../utils/chartTheme";
+import {
+  DEFAULT_CHARTS,
+  TIME_KEY,
+  axisOptions,
+  liveCatalog,
+  sensorLabel,
+  toNumberOrNull,
+} from "../utils/sensors";
+import { buildChartData, buildChartOptions, isTimeChart } from "../utils/chartBuild";
+import { assetUrl, formatDate, formatDateTime, repairJobLabel, sessionFileName } from "../utils/format";
 
 import AutoComplete from "primevue/autocomplete";
 import Button from "primevue/button";
 import Dialog from "primevue/dialog";
 import Dropdown from "primevue/dropdown";
 import InputNumber from "primevue/inputnumber";
+import SelectButton from "primevue/selectbutton";
 import { useToast } from "primevue/usetoast";
-import { Line } from "vue-chartjs";
+import { Line, Scatter } from "vue-chartjs";
 import {
   Chart as ChartJS,
   Title,
@@ -25,97 +36,104 @@ import {
   Filler,
 } from "chart.js";
 
-ChartJS.register(
-  Title,
-  Tooltip,
-  Legend,
-  LineElement,
-  PointElement,
-  LinearScale,
-  CategoryScale,
-  Filler,
-);
+ChartJS.register(Title, Tooltip, Legend, LineElement, PointElement, LinearScale, CategoryScale, Filler);
 
-const STEPS = 40;
+const STEPS = 40; // samples shown in the live charts (1 sample per second)
 const route = useRoute();
-const valveStore = useValveStore();
+const jobStore = useRepairJobStore();
 const toast = useToast();
 const { isDark } = useTheme();
 // Chart.js draws on canvas and cannot read CSS variables, so the axis and grid
-// colours live in utils/chartTheme.js. Line colours are the fixed per-signal
-// colours from the original design (not themed).
+// colours live in utils/chartTheme.js.
 const chartTheme = computed(() => (isDark.value ? DARK_CHART : LIGHT_CHART));
 
-const valve = computed(() => valveStore.selectedValve);
+// --- Test source: a repair job, or manual testing with no reference ---
+const modeOptions = [
+  { label: "Repair Job", value: "repair_job" },
+  { label: "Manual Testing", value: "manual" },
+];
+const testMode = computed({
+  get: () => jobStore.testMode,
+  set: (v) => {
+    if (v) jobStore.setMode(v);
+  },
+});
+const job = computed(() => (testMode.value === "repair_job" ? jobStore.selectedJob : null));
+const isManual = computed(() => testMode.value === "manual");
+const canOperate = computed(() => isManual.value || !!job.value);
 
-const allValves = ref([]);
+const allJobs = ref([]);
 const query = ref("");
 const suggestions = ref([]);
-const pendingValve = ref(null);
+const pendingJob = ref(null);
 
 const controlStatus = ref("stopped");
 const isRecording = ref(false);
 const isStarting = ref(false);
 const isStopping = ref(false);
 const recordedSession = ref([]);
+const recordingStartedAt = ref(null);
 
-// --- Telemetry Selection State ---
-const pressureOptions = [
-  { label: "Pressure 1", value: "pressure_1" },
-  { label: "Pressure 2", value: "pressure_2" },
-];
-const selectedPressure = ref("pressure_1");
+// --- Sensors and chart layout ---
+const customSensors = ref([]);
+const catalog = computed(() => liveCatalog(customSensors.value));
+const xOptions = computed(() => axisOptions(catalog.value, { includeTime: true }));
+const yOptions = computed(() => axisOptions(catalog.value));
 
-const flowOptions = [
-  { label: "Flow 1", value: "flow_1" },
-  { label: "Flow 2", value: "flow_2" },
-];
-const selectedFlow = ref("flow_1");
-
-const channelOptions = [
-  { label: "Channel 1", value: 1 },
-  { label: "Channel 2", value: 2 },
-  { label: "Channel 3", value: 3 },
-  { label: "Channel 4", value: 4 },
-  { label: "Channel 5", value: 5 },
-  { label: "Channel 6", value: 6 },
-  { label: "Channel 7 (manual)", value: 7 },
-  { label: "Channel 8 (manual)", value: 8 },
-];
-const selectedChannel = ref(1);
+const chartCountOptions = [1, 2, 3, 4].map((n) => ({ label: `${n} chart${n > 1 ? "s" : ""}`, value: n }));
+const LAYOUT_KEY = "valvedax.records.chartLayout";
+function loadLayout() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(LAYOUT_KEY) || "null");
+    if (saved && Array.isArray(saved.charts) && saved.charts.length === 4) {
+      return { count: Math.min(4, Math.max(1, Number(saved.count) || 4)), charts: saved.charts };
+    }
+  } catch (e) {
+    /* storage unavailable: use defaults */
+  }
+  return { count: 4, charts: DEFAULT_CHARTS.map((c) => ({ ...c })) };
+}
+const initialLayout = loadLayout();
+const chartCount = ref(initialLayout.count);
+const chartConfigs = ref(initialLayout.charts);
+const visibleCharts = computed(() => chartConfigs.value.slice(0, chartCount.value));
+watch(
+  [chartCount, chartConfigs],
+  () => {
+    try {
+      localStorage.setItem(LAYOUT_KEY, JSON.stringify({ count: chartCount.value, charts: chartConfigs.value }));
+    } catch (e) {
+      /* ignore */
+    }
+  },
+  { deep: true },
+);
 
 // Manual command inputs. Command 7 / Command 8 (0-1300 mA) are typed in by the
-// operator and are not read from OPC UA, so there is no feedback for these two
-// channels. Selecting Channel 7 or 8 plots the typed value as the Command line
-// (no Feedback line), and both values are stored on every recorded sample as
-// command_7 / command_8 (null while the field is empty).
+// operator and are not read from OPC UA, so there is no feedback for them.
 const MANUAL_MAX_MA = 1300;
 const manualCmd7 = ref(null);
 const manualCmd8 = ref(null);
-const isManualChannel = computed(() => selectedChannel.value >= 7);
+const plotsCommand = (key) => visibleCharts.value.some((c) => c.x === key || c.y === key);
 
-// --- Telemetry Graph Buffers ---
+// --- Live data ---
 let liveDataInterval = null;
-const liveLabels = ref(Array(STEPS).fill(""));
-const livePressure = ref(Array(STEPS).fill(0));
-const liveFlow = ref(Array(STEPS).fill(0));
-const liveCommand = ref(Array(STEPS).fill(0));
-const liveFeedback = ref(Array(STEPS).fill(0));
-const liveOilTemp = ref(Array(STEPS).fill(0));
+const liveBuffer = ref([]);
+const latest = ref({});
 
-const currentValues = ref({
-  pressure: "0.0",
-  flow: "0.0",
-  command: "0.0",
-  feedback: "0.0",
-  oil_temp: "0.0",
-});
+const liveTiles = [
+  { key: "pressure_1", label: "Pressure 1", unit: "bar" },
+  { key: "pressure_2", label: "Pressure 2", unit: "bar" },
+  { key: "flow_1", label: "Flow 1", unit: "L/min" },
+  { key: "flow_2", label: "Flow 2", unit: "L/min" },
+];
+function tileValue(key) {
+  const v = toNumberOrNull(latest.value[key]);
+  return v === null ? "-" : v.toFixed(1);
+}
 
-// --- Timed Recording & Modal State ---
+// --- Recording timer & dialogs ---
 const recordConfigDialog = ref(false);
-const recordFinishedDialog = ref(false);
-const finishedSampleCount = ref(0);
-
 const durationOptions = [
   { label: "1 Minute", value: 60 },
   { label: "5 Minutes", value: 300 },
@@ -124,7 +142,6 @@ const durationOptions = [
   { label: "60 Minutes", value: 3600 },
 ];
 const selectedDuration = ref(60);
-
 const remainingSeconds = ref(0);
 let countdownInterval = null;
 
@@ -134,6 +151,19 @@ const formattedCountdown = computed(() => {
   return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 });
 
+// The finished session waits here until the operator decides what to do with
+// it: save it as an official record, download the raw PDF/CSV, or discard it.
+const session = ref(null); // { samples, charts, catalog, job, mode, startedAt, endedAt, reason }
+const sessionDialog = ref(false);
+const sessionState = ref({ saved: false, pdf: false, csv: false, saving: false });
+const confirmDiscard = ref(false);
+
+const sessionDuration = computed(() => {
+  if (!session.value) return 0;
+  return Math.max(0, Math.round((session.value.endedAt - session.value.startedAt) / 1000));
+});
+const sessionHandled = computed(() => sessionState.value.saved || sessionState.value.pdf || sessionState.value.csv);
+
 const sliderTrackRef = ref(null);
 const slideOffset = ref(0);
 const isDragging = ref(false);
@@ -142,7 +172,7 @@ let maxSlide = 0;
 
 function handleRecButtonClick() {
   if (isRecording.value) {
-    stopRecordingSession(true);
+    stopRecordingSession("manual");
   } else {
     resetSlider();
     recordConfigDialog.value = true;
@@ -159,8 +189,7 @@ function onSlideStart(e) {
   isDragging.value = true;
   const clientX = e.touches ? e.touches[0].clientX : e.clientX;
   startX = clientX - slideOffset.value;
-  const trackWidth = sliderTrackRef.value.clientWidth;
-  maxSlide = trackWidth - 52;
+  maxSlide = sliderTrackRef.value.clientWidth - 52;
 }
 
 function onSlideMove(e) {
@@ -181,15 +210,15 @@ function onSlideMove(e) {
 function onSlideEnd() {
   if (!isDragging.value) return;
   isDragging.value = false;
-  if (slideOffset.value < maxSlide * 0.9) {
-    slideOffset.value = 0;
-  }
+  if (slideOffset.value < maxSlide * 0.9) slideOffset.value = 0;
 }
 
 function triggerStartRecord() {
+  if (sessionDialog.value) return;
   recordConfigDialog.value = false;
   isRecording.value = true;
   recordedSession.value = [];
+  recordingStartedAt.value = new Date();
   remainingSeconds.value = selectedDuration.value;
 
   toast.add({
@@ -204,85 +233,185 @@ function triggerStartRecord() {
     remainingSeconds.value--;
     if (remainingSeconds.value <= 0) {
       clearInterval(countdownInterval);
-      stopRecordingSession(false);
+      stopRecordingSession("timer");
     }
   }, 1000);
 }
 
-async function stopRecordingSession(manual = false) {
+// reason: "manual" (Rec button), "hpu" (Stop button), "timer" (duration reached)
+function stopRecordingSession(reason) {
+  if (!isRecording.value) return;
   isRecording.value = false;
   if (countdownInterval) clearInterval(countdownInterval);
 
-  if (recordedSession.value.length > 0) {
-    try {
-      await api.post("/records", {
-        valve_id: valve.value.id,
-        data_payload: JSON.stringify(recordedSession.value),
-      });
-      finishedSampleCount.value = recordedSession.value.length;
-    } catch (error) {
-      toast.add({
-        severity: "error",
-        summary: "Save Failed",
-        detail: "Could not save telemetry to database.",
-        life: 3500,
-      });
-    }
+  const samples = recordedSession.value.slice();
+  if (!samples.length) {
+    toast.add({ severity: "warn", summary: "Recording Stopped", detail: "No samples were captured.", life: 3000 });
+    return;
   }
 
-  if (manual) {
+  session.value = {
+    samples,
+    charts: visibleCharts.value.map((c) => ({ ...c })),
+    catalog: catalog.value.map((s) => ({ key: s.key, label: s.label, unit: s.unit, group: s.group })),
+    job: job.value ? { ...job.value } : null,
+    mode: testMode.value,
+    startedAt: recordingStartedAt.value || new Date(),
+    endedAt: new Date(),
+    reason,
+  };
+  sessionState.value = { saved: false, pdf: false, csv: false, saving: false };
+  confirmDiscard.value = false;
+  sessionDialog.value = true;
+}
+
+async function saveSessionAsRecord() {
+  const s = session.value;
+  if (!s || sessionState.value.saved || sessionState.value.saving) return;
+  sessionState.value.saving = true;
+  const meta = {
+    version: 2,
+    started_at: s.startedAt.toISOString(),
+    ended_at: s.endedAt.toISOString(),
+    sample_interval_ms: 1000,
+    charts: s.charts,
+    sensors: s.catalog,
+  };
+  const body = {
+    test_mode: s.mode,
+    data_payload: JSON.stringify(s.samples),
+    meta: JSON.stringify(meta),
+  };
+  if (s.mode === "repair_job" && s.job) body.repair_job_id = s.job.id;
+
+  try {
+    await api.post("/records", body);
+    sessionState.value.saved = true;
     toast.add({
-      severity: "warn",
-      summary: "Recording Halted",
-      detail: `Stopped early. Persisted ${recordedSession.value.length} samples.`,
-      life: 3000,
+      severity: "success",
+      summary: "Record Saved",
+      detail: `${s.samples.length} samples saved. Available in Generate Report.`,
+      life: 3500,
     });
-  } else {
-    recordFinishedDialog.value = true;
+  } catch (error) {
+    const msg = error.response?.data?.error || "Could not save telemetry to database.";
+    toast.add({ severity: "error", summary: "Save Failed", detail: msg, life: 4500 });
+  } finally {
+    sessionState.value.saving = false;
   }
 }
 
-async function loadValves() {
+// jsPDF is loaded only when a raw PDF is requested, to keep the main bundle small.
+async function downloadSessionPdf() {
+  const s = session.value;
+  if (!s) return;
   try {
-    const response = await api.get("/valves");
-    allValves.value = Array.isArray(response.data) ? response.data : [];
-  } catch (error) {}
+    const { downloadRawDataPdf } = await import("../utils/rawDataPdf");
+    const name = downloadRawDataPdf({
+      samples: s.samples,
+      charts: s.charts,
+      catalog: s.catalog,
+      job: s.job,
+      startedAt: s.startedAt,
+    });
+    sessionState.value.pdf = true;
+    toast.add({ severity: "info", summary: "Raw PDF", detail: name, life: 3000 });
+  } catch (error) {
+    console.error("PDF export failed:", error);
+    toast.add({ severity: "error", summary: "PDF Failed", detail: "Could not build the raw data PDF.", life: 4000 });
+  }
 }
 
-async function fetchValveById(id) {
-  if (!id) return;
+function exportSessionCSV() {
+  const s = session.value;
+  if (!s) return;
+  const cols = s.catalog;
+  const esc = (v) => {
+    const t = String(v ?? "");
+    return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
+  };
+  const header = ["Time", "Timestamp", ...cols.map((c) => sensorLabel(c))].map(esc).join(",");
+  const rows = s.samples.map((r) =>
+    [r.time, r.ts, ...cols.map((c) => (r[c.key] === null || r[c.key] === undefined ? "" : r[c.key]))].map(esc).join(","),
+  );
+  const blob = new Blob([[header, ...rows].join("\n")], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.setAttribute("href", url);
+  link.setAttribute("download", sessionFileName(s.startedAt, s.job, "csv"));
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  sessionState.value.csv = true;
+}
+
+function closeSessionDialog() {
+  if (!sessionHandled.value && !confirmDiscard.value) {
+    confirmDiscard.value = true;
+    return;
+  }
+  sessionDialog.value = false;
+  confirmDiscard.value = false;
+}
+
+function discardSession() {
+  session.value = null;
+  sessionDialog.value = false;
+  confirmDiscard.value = false;
+  toast.add({ severity: "warn", summary: "Session Discarded", detail: "The recorded samples were not kept.", life: 3000 });
+}
+
+function reopenSession() {
+  if (session.value) {
+    confirmDiscard.value = false;
+    sessionDialog.value = true;
+  }
+}
+
+// --- Repair job selection ---
+async function loadJobs() {
   try {
-    const response = await api.get(`/valves/${id}`);
-    valveStore.selectValve(response.data);
-  } catch (error) {}
+    const response = await api.get("/repair-jobs");
+    allJobs.value = Array.isArray(response.data) ? response.data : [];
+  } catch (error) {
+    allJobs.value = [];
+  }
+}
+
+async function loadCustomSensors() {
+  try {
+    const res = await fetchSensorCatalog();
+    customSensors.value = Array.isArray(res.data?.custom) ? res.data.custom : [];
+  } catch (error) {
+    customSensors.value = [];
+  }
 }
 
 function search(event) {
   const q = String(event.query || "").trim().toLowerCase();
-  suggestions.value = allValves.value.filter(
-    (item) =>
-      (item.part_number && item.part_number.toLowerCase().includes(q)) ||
-      (item.manufacturer && item.manufacturer.toLowerCase().includes(q)),
+  suggestions.value = allJobs.value.filter((j) =>
+    [j.job_number, j.job_name, j.customer, j.serial_number, j.so_number, j.material_number]
+      .filter(Boolean)
+      .some((f) => String(f).toLowerCase().includes(q)),
   );
 }
 
 function onSelect(event) {
-  pendingValve.value = event.value;
+  pendingJob.value = event.value;
 }
 
-function confirmShow() {
-  if (!pendingValve.value) return;
-  valveStore.selectValve(pendingValve.value);
+function confirmLoadJob() {
+  if (!pendingJob.value) return;
+  jobStore.selectJob(pendingJob.value);
   toast.add({
     severity: "info",
-    summary: "Valve Configured",
-    detail: `${pendingValve.value.part_number} loaded into test bench.`,
+    summary: "Repair Job Loaded",
+    detail: `${pendingJob.value.job_number} — ${pendingJob.value.job_name}`,
     life: 2500,
   });
 }
 
 async function startValve() {
-  if (!valve.value || isStarting.value) return;
+  if (!canOperate.value || isStarting.value) return;
   isStarting.value = true;
   try {
     await startOutput();
@@ -296,35 +425,18 @@ async function startValve() {
 }
 
 async function stopValve() {
-  if (!valve.value || isStopping.value) return;
+  if (isStopping.value) return;
   isStopping.value = true;
   try {
     await stopOutput();
     controlStatus.value = "stopped";
-    if (isRecording.value) stopRecordingSession(true);
+    if (isRecording.value) stopRecordingSession("hpu");
     toast.add({ severity: "warn", summary: "HPU Stopped", detail: "Output signal disengaged.", life: 3000 });
   } catch (error) {
     toast.add({ severity: "error", summary: "Stop Failed", detail: "Failed to disengage HPU.", life: 4000 });
   } finally {
     isStopping.value = false;
   }
-}
-
-function exportRecordedCSV() {
-  if (!recordedSession.value.length) return;
-  
-  // Headers prioritize the primary recorded generic values mapping to the dropdown selection
-  const headers = "Timestamp,Selected_Pressure,Selected_Flow,Selected_Command,Selected_Feedback,Oil_Temp,P1,P2,F1,F2,Cmd1,Fb1,Cmd2,Fb2,Cmd3,Fb3,Cmd4,Fb4,Cmd5,Fb5,Cmd6,Fb6,Cmd7_manual,Cmd8_manual\n";
-  const rows = recordedSession.value
-    .map((r) => `${r.time},${r.pressure},${r.flow},${r.command ?? ""},${r.feedback ?? ""},${r.oil_temp},${r.pressure_1},${r.pressure_2},${r.flow_1},${r.flow_2},${r.command_1},${r.feedback_1},${r.command_2},${r.feedback_2},${r.command_3},${r.feedback_3},${r.command_4},${r.feedback_4},${r.command_5},${r.feedback_5},${r.command_6},${r.feedback_6},${r.command_7 ?? ""},${r.command_8 ?? ""}`)
-    .join("\n");
-
-  const blob = new Blob([headers + rows], { type: "text/csv;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.setAttribute("href", url);
-  link.setAttribute("download", `ValveDAX_${valve.value?.part_number || "Valve"}_${Date.now()}.csv`);
-  link.click();
 }
 
 async function pollLiveData() {
@@ -337,195 +449,58 @@ async function pollLiveData() {
     d = res.data || {};
   } catch (e) {}
 
-  // Determine which channels the user wants to view and record based on dropdowns
-  const pKey = selectedPressure.value;
-  const fKey = selectedFlow.value;
-  const ch = selectedChannel.value;
-
-  const pSelected = Number(d[pKey] ?? d.pressure ?? 0);
-  const fSelected = Number(d[fKey] ?? d.flow ?? 0);
-  // Channels 7/8 are manual: command = typed value, no feedback exists.
-  const isManual = ch >= 7;
-  const manualVal = ch === 7 ? manualCmd7.value : ch === 8 ? manualCmd8.value : null;
-  const cmdSelected = isManual ? (manualVal ?? null) : Number(d[`command_${ch}`] ?? d.command ?? 0);
-  const fbSelected = isManual ? null : Number(d[`feedback_${ch}`] ?? d.feedback ?? 0);
-  const temp = Number(d.oil_temp ?? d.temperature ?? 0);
-
-  // Update UI textual values
-  currentValues.value.pressure = pSelected.toFixed(1);
-  currentValues.value.flow = fSelected.toFixed(1);
-  currentValues.value.command = cmdSelected === null ? "-" : cmdSelected.toFixed(1);
-  currentValues.value.feedback = fbSelected === null ? "-" : fbSelected.toFixed(1);
-  currentValues.value.oil_temp = temp.toFixed(1);
-
-  // Buffer for graphs
-  liveLabels.value.shift();
-  liveLabels.value.push(timeStr);
-  livePressure.value.shift();
-  livePressure.value.push(pSelected);
-  liveFlow.value.shift();
-  liveFlow.value.push(fSelected);
-  liveCommand.value.shift();
-  liveCommand.value.push(cmdSelected);
-  liveFeedback.value.shift();
-  liveFeedback.value.push(fbSelected);
-  liveOilTemp.value.shift();
-  liveOilTemp.value.push(temp);
-
-  // If recording, log the explicitly selected channels into the generic fields 
-  // (so the report automatically reads the selected channels). Full mapping is also kept.
-  if (isRecording.value) {
-    recordedSession.value.push({
-      time: timeStr,
-      pressure: pSelected, 
-      flow: fSelected,
-      command: cmdSelected,
-      feedback: fbSelected,
-      oil_temp: temp,
-      pressure_1: Number(d.pressure_1 ?? 0),
-      pressure_2: Number(d.pressure_2 ?? 0),
-      flow_1: Number(d.flow_1 ?? 0),
-      flow_2: Number(d.flow_2 ?? 0),
-      command_1: Number(d.command_1 ?? 0), feedback_1: Number(d.feedback_1 ?? 0),
-      command_2: Number(d.command_2 ?? 0), feedback_2: Number(d.feedback_2 ?? 0),
-      command_3: Number(d.command_3 ?? 0), feedback_3: Number(d.feedback_3 ?? 0),
-      command_4: Number(d.command_4 ?? 0), feedback_4: Number(d.feedback_4 ?? 0),
-      command_5: Number(d.command_5 ?? 0), feedback_5: Number(d.feedback_5 ?? 0),
-      command_6: Number(d.command_6 ?? 0), feedback_6: Number(d.feedback_6 ?? 0),
-      // Manual commands: no feedback is recorded for these.
-      command_7: manualCmd7.value ?? null,
-      command_8: manualCmd8.value ?? null,
-    });
+  // One sample holds every sensor, so any X/Y pair can be drawn now or later
+  // in the report. Unconfigured nodes come back as null and stay null.
+  const sample = { time: timeStr, ts: now.toISOString() };
+  for (const s of catalog.value) {
+    if (s.key === "command_7" || s.key === "command_8") continue;
+    sample[s.key] = toNumberOrNull(d[s.key]);
   }
+  sample.command_7 = toNumberOrNull(manualCmd7.value);
+  sample.command_8 = toNumberOrNull(manualCmd8.value);
+
+  latest.value = sample;
+  const buf = liveBuffer.value.slice(-(STEPS - 1));
+  buf.push(sample);
+  liveBuffer.value = buf;
+
+  if (isRecording.value) recordedSession.value.push(sample);
 }
 
-const pressureChartData = computed(() => {
-  return {
-    labels: [...liveLabels.value],
-    datasets: [
-      {
-        label: "Pressure (bar)",
-        data: [...livePressure.value],
-        borderColor: "#00CCFF",
-        backgroundColor: "rgba(0, 204, 255, 0.12)",
-        fill: true,
-        tension: 0.35,
-        pointRadius: 0,
-        borderWidth: 2,
-      },
-    ],
-  };
-});
+// Live chart bindings, one per visible chart
+const liveCharts = computed(() =>
+  visibleCharts.value.map((cfg, i) => ({
+    cfg,
+    component: isTimeChart(cfg) ? Line : Scatter,
+    data: buildChartData(liveBuffer.value, cfg, catalog.value, { index: i }),
+    options: buildChartOptions(cfg, catalog.value, chartTheme.value),
+  })),
+);
 
-const flowChartData = computed(() => {
-  return {
-    labels: [...liveLabels.value],
-    datasets: [
-      {
-        label: "Flow (L/min)",
-        data: [...liveFlow.value],
-        borderColor: "#10b981",
-        backgroundColor: "rgba(16, 185, 129, 0.08)",
-        fill: true,
-        tension: 0.35,
-        pointRadius: 0,
-        borderWidth: 2,
-      },
-    ],
-  };
-});
+function swapAxes(i) {
+  const c = chartConfigs.value[i];
+  if (c.x === TIME_KEY) return;
+  chartConfigs.value[i] = { x: c.y, y: c.x };
+}
 
-// Command and Feedback share one chart.
-const commandFeedbackChartData = computed(() => {
-  const datasets = [
-    {
-      label: "Command",
-      data: [...liveCommand.value],
-      borderColor: "#f59e0b",
-      backgroundColor: "rgba(245, 158, 11, 0.08)",
-      fill: false,
-      tension: 0.35,
-      pointRadius: 0,
-      borderWidth: 2,
-    },
-  ];
-  // Manual channels (7/8) have no feedback signal, so the line is left out.
-  if (!isManualChannel.value) {
-    datasets.push({
-      label: "Feedback",
-      data: [...liveFeedback.value],
-      borderColor: "#8b5cf6",
-      backgroundColor: "rgba(139, 92, 246, 0.08)",
-      fill: false,
-      tension: 0.35,
-      pointRadius: 0,
-      borderWidth: 2,
-    });
-  }
-  return { labels: [...liveLabels.value], datasets };
-});
+function resetLayout() {
+  chartCount.value = 4;
+  chartConfigs.value = DEFAULT_CHARTS.map((c) => ({ ...c }));
+}
 
-const oilTempChartData = computed(() => {
-  return {
-    labels: [...liveLabels.value],
-    datasets: [
-      {
-        label: "Oil Temp (°C)",
-        data: [...liveOilTemp.value],
-        borderColor: "#f97316",
-        backgroundColor: "rgba(249, 115, 22, 0.12)",
-        fill: true,
-        tension: 0.35,
-        pointRadius: 0,
-        borderWidth: 2,
-      },
-    ],
-  };
-});
-
-const chartOptions = computed(() => {
-  const axisColor = chartTheme.value.axis;
-  return {
-    responsive: true,
-    maintainAspectRatio: false,
-    animation: { duration: 0 },
-    interaction: { intersect: false, mode: "index" },
-    plugins: {
-      legend: {
-        display: true,
-        position: "bottom",
-        labels: { color: axisColor, boxWidth: 10, boxHeight: 3, usePointStyle: true, padding: 6, font: { size: 9 } },
-      },
-      tooltip: { enabled: true },
-    },
-    scales: {
-      x: {
-        display: true,
-        type: "category",
-        grid: { display: false },
-        ticks: { color: axisColor, font: { size: 9 }, maxTicksLimit: 6 },
-      },
-      y: {
-        beginAtZero: true,
-        border: { display: false },
-        grid: { color: chartTheme.value.grid },
-        ticks: { color: axisColor, font: { size: 9 } },
-      },
-    },
-  };
-});
-
-const imageUrl = computed(() => {
-  if (!valve.value?.image_path) return null;
-  if (valve.value.image_path.startsWith("http")) return valve.value.image_path;
-  const base = import.meta.env.VITE_API_URL || "";
-  return `${base}${valve.value.image_path}`;
-});
+const imageUrl = computed(() => assetUrl(job.value?.image_path));
 
 onMounted(async () => {
-  await loadValves();
-  const targetId = route.params.id || route.query.id;
-  if (targetId) await fetchValveById(targetId);
+  await Promise.all([loadJobs(), loadCustomSensors()]);
+  const targetId = Number(route.query.job);
+  if (targetId) {
+    const found = allJobs.value.find((j) => j.id === targetId);
+    if (found) {
+      jobStore.selectJob(found);
+      pendingJob.value = found;
+    }
+  }
+  if (jobStore.selectedJob) query.value = jobStore.selectedJob;
   liveDataInterval = setInterval(pollLiveData, 1000);
   window.addEventListener("mousemove", onSlideMove);
   window.addEventListener("mouseup", onSlideEnd);
@@ -547,21 +522,39 @@ onBeforeUnmount(() => {
   <div class="records-page">
     <div class="search-toolbar">
       <div class="search-section">
-        <AutoComplete
-          v-model="query"
-          :suggestions="suggestions"
-          optionLabel="part_number"
-          placeholder="Select Valve for Testing..."
-          class="valve-search"
-          @complete="search"
-          @item-select="onSelect"
+        <SelectButton
+          v-model="testMode"
+          :options="modeOptions"
+          optionLabel="label"
+          optionValue="value"
+          :allowEmpty="false"
+          :disabled="isRecording"
+          class="mode-switch"
         />
-        <Button
-          label="Load"
-          icon="pi pi-check"
-          :disabled="!pendingValve"
-          @click="confirmShow"
-        />
+        <template v-if="!isManual">
+          <AutoComplete
+            v-model="query"
+            :suggestions="suggestions"
+            :optionLabel="repairJobLabel"
+            placeholder="Select Repair Job for Testing..."
+            class="valve-search"
+            :disabled="isRecording"
+            @complete="search"
+            @item-select="onSelect"
+          >
+            <template #option="slotProps">
+              <div class="option-row">
+                <strong>{{ slotProps.option.job_number }} — {{ slotProps.option.job_name }}</strong>
+                <small>{{ slotProps.option.customer || "-" }} · SN {{ slotProps.option.serial_number || "-" }} · {{ formatDate(slotProps.option.job_date) }}</small>
+              </div>
+            </template>
+          </AutoComplete>
+          <Button label="Load" icon="pi pi-check" :disabled="!pendingJob || isRecording" @click="confirmLoadJob" />
+        </template>
+        <span v-else class="manual-note">
+          <i class="pi pi-info-circle"></i>
+          No reference job. Records are saved as manual tests.
+        </span>
       </div>
 
       <!-- Real-time Status & Telemetry Bar -->
@@ -575,25 +568,9 @@ onBeforeUnmount(() => {
           <span class="pulse-dot"></span>
           <span>HPU: {{ controlStatus.toUpperCase() }}</span>
         </div>
-        <div class="live-value-item">
-          <span class="label">Command</span>
-          <span class="value">{{ currentValues.command }}</span>
-        </div>
-        <div class="live-value-item">
-          <span class="label">Feedback</span>
-          <span class="value">{{ currentValues.feedback }}</span>
-        </div>
-        <div class="live-value-item">
-          <span class="label">Pressure</span>
-          <span class="value">{{ currentValues.pressure }} <small>bar</small></span>
-        </div>
-        <div class="live-value-item">
-          <span class="label">Flow</span>
-          <span class="value">{{ currentValues.flow }} <small>L/min</small></span>
-        </div>
-        <div class="live-value-item">
-          <span class="label">Oil Temp</span>
-          <span class="value">{{ currentValues.oil_temp }} <small>°C</small></span>
+        <div v-for="t in liveTiles" :key="t.key" class="live-value-item">
+          <span class="label">{{ t.label }}</span>
+          <span class="value">{{ tileValue(t.key) }} <small>{{ t.unit }}</small></span>
         </div>
       </div>
     </div>
@@ -608,7 +585,7 @@ onBeforeUnmount(() => {
             severity="success"
             class="ctrl-btn start-btn"
             :loading="isStarting"
-            :disabled="!valve || isStarting || controlStatus === 'active'"
+            :disabled="!canOperate || isStarting || controlStatus === 'active'"
             @click="startValve"
           />
           <Button
@@ -617,7 +594,7 @@ onBeforeUnmount(() => {
             severity="danger"
             class="ctrl-btn"
             :loading="isStopping"
-            :disabled="!valve || isStopping || controlStatus === 'stopped'"
+            :disabled="isStopping || controlStatus === 'stopped'"
             @click="stopValve"
           />
           <Button
@@ -625,7 +602,7 @@ onBeforeUnmount(() => {
             :icon="isRecording ? 'pi pi-stop-circle' : 'pi pi-circle-fill'"
             :severity="isRecording ? 'warn' : 'secondary'"
             class="ctrl-btn"
-            :disabled="!valve"
+            :disabled="!canOperate || sessionDialog"
             @click="handleRecButtonClick"
           />
         </section>
@@ -637,7 +614,7 @@ onBeforeUnmount(() => {
             <span class="manual-range">0&ndash;{{ MANUAL_MAX_MA }} mA</span>
           </header>
           <div class="manual-body">
-            <div class="manual-field" :class="{ active: selectedChannel === 7 }">
+            <div class="manual-field" :class="{ active: plotsCommand('command_7') }">
               <label for="manual-cmd7" class="info-label">Command 7</label>
               <InputNumber
                 v-model="manualCmd7"
@@ -651,7 +628,7 @@ onBeforeUnmount(() => {
                 fluid
               />
             </div>
-            <div class="manual-field" :class="{ active: selectedChannel === 8 }">
+            <div class="manual-field" :class="{ active: plotsCommand('command_8') }">
               <label for="manual-cmd8" class="info-label">Command 8</label>
               <InputNumber
                 v-model="manualCmd8"
@@ -677,86 +654,110 @@ onBeforeUnmount(() => {
             <img v-if="imageUrl" :src="imageUrl" class="valve-image" alt="Valve Preview" />
             <div v-else class="image-placeholder">
               <i class="pi pi-image"></i>
-              <span>{{ valve ? "No Image Uploaded" : "No Valve Loaded" }}</span>
+              <span>{{ isManual ? "Manual Testing" : job ? "No Image Uploaded" : "No Repair Job Loaded" }}</span>
             </div>
           </div>
         </section>
 
-        <!-- Rating Spec Sheet -->
+        <!-- Job Sheet -->
         <section class="panel info-panel">
-          <div class="info-row">
-            <span class="info-label">Part Number</span>
-            <span class="info-val">{{ valve?.part_number || "-" }}</span>
+          <template v-if="!isManual">
+            <div class="info-row">
+              <span class="info-label">Job Number</span>
+              <span class="info-val">{{ job?.job_number || "-" }}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">Customer</span>
+              <span class="info-val">{{ job?.customer || "-" }}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">Valve / Serial</span>
+              <span class="info-val">{{ job?.valve_type || "-" }} / {{ job?.serial_number || "-" }}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">Rated / Max Flow</span>
+              <span class="info-val">{{ job?.rated_flow ?? "-" }} / {{ job?.max_flow ?? "-" }} L/min</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">Max Pressure</span>
+              <span class="info-val">{{ job?.max_pressure ?? "-" }} bar</span>
+            </div>
+          </template>
+          <div v-else class="manual-info">
+            <i class="pi pi-sliders-v"></i>
+            <span>Manual testing: no reference specification. The report shows recorded peaks without Pass/Fail verification.</span>
           </div>
-          <div class="info-row">
-            <span class="info-label">Series / Type</span>
-            <span class="info-val">{{ valve?.component_series || "-" }} / {{ valve?.valve_type || "-" }}</span>
-          </div>
-          <div class="info-row">
-            <span class="info-label">Rated Flow</span>
-            <span class="info-val">{{ valve?.rated_flow ?? "-" }} L/min</span>
-          </div>
-          <div class="info-row">
-            <span class="info-label">Max Pressure</span>
-            <span class="info-val">{{ valve?.max_pressure ?? "-" }} bar</span>
-          </div>
-          <div v-if="recordedSession.length > 0 && !isRecording" class="export-block">
+          <div v-if="session && !sessionDialog && !isRecording" class="export-block">
             <Button
-              label="Export CSV"
-              icon="pi pi-download"
+              label="Last Session Actions"
+              icon="pi pi-folder-open"
               severity="help"
               class="export-btn"
-              @click="exportRecordedCSV"
+              @click="reopenSession"
             />
           </div>
         </section>
       </div>
 
-      <!-- 1. Top-Center: Pressure -->
-      <section class="panel graph-panel pressure-graph">
-        <header class="panel-header">
-          <h3>Pressure</h3>
-          <Dropdown v-model="selectedPressure" :options="pressureOptions" optionLabel="label" optionValue="value" class="header-dropdown" />
-        </header>
-        <div class="chart-container">
-          <Line :data="pressureChartData" :options="chartOptions" />
+      <!-- Charts: 1 to 4, each with its own X and Y signal -->
+      <div class="charts-area">
+        <div class="charts-toolbar panel">
+          <span class="toolbar-label">Trend Layout</span>
+          <Dropdown
+            v-model="chartCount"
+            :options="chartCountOptions"
+            optionLabel="label"
+            optionValue="value"
+            class="header-dropdown count-dropdown"
+            inputId="chart-count"
+          />
+          <Button label="Reset" icon="pi pi-refresh" text size="small" class="reset-btn" @click="resetLayout" />
+          <span class="toolbar-hint">All signals are recorded. The layout only changes what is shown.</span>
         </div>
-      </section>
 
-      <!-- 2. Top-Right: Flow -->
-      <section class="panel graph-panel flow-graph">
-        <header class="panel-header">
-          <h3>Flow</h3>
-          <Dropdown v-model="selectedFlow" :options="flowOptions" optionLabel="label" optionValue="value" class="header-dropdown" />
-        </header>
-        <div class="chart-container">
-          <Line :data="flowChartData" :options="chartOptions" />
+        <div class="charts-grid" :class="`count-${chartCount}`">
+          <section v-for="(c, i) in liveCharts" :key="i" class="panel graph-panel" :class="`chart-${i + 1}`">
+            <header class="panel-header chart-header">
+              <h3>Chart {{ i + 1 }}</h3>
+              <div class="axis-pickers">
+                <label class="axis-label" :for="`chart-${i}-y`">Y</label>
+                <Dropdown
+                  v-model="chartConfigs[i].y"
+                  :options="yOptions"
+                  optionLabel="label"
+                  optionValue="value"
+                  class="header-dropdown axis-dropdown"
+                  :inputId="`chart-${i}-y`"
+                  filter
+                />
+                <label class="axis-label" :for="`chart-${i}-x`">X</label>
+                <Dropdown
+                  v-model="chartConfigs[i].x"
+                  :options="xOptions"
+                  optionLabel="label"
+                  optionValue="value"
+                  class="header-dropdown axis-dropdown"
+                  :inputId="`chart-${i}-x`"
+                  filter
+                />
+                <Button
+                  icon="pi pi-arrow-right-arrow-left"
+                  text
+                  rounded
+                  size="small"
+                  class="swap-btn"
+                  title="Swap X and Y"
+                  :disabled="c.cfg.x === TIME_KEY"
+                  @click="swapAxes(i)"
+                />
+              </div>
+            </header>
+            <div class="chart-container">
+              <component :is="c.component" :data="c.data" :options="c.options" />
+            </div>
+          </section>
         </div>
-      </section>
-
-      <!-- 3. Bottom-Center: Command vs Feedback -->
-      <section class="panel graph-panel command-graph">
-        <header class="panel-header">
-          <h3>
-            Command vs Feedback
-            <span v-if="isManualChannel" class="manual-tag">Manual command &middot; no feedback</span>
-          </h3>
-          <Dropdown v-model="selectedChannel" :options="channelOptions" optionLabel="label" optionValue="value" class="header-dropdown" />
-        </header>
-        <div class="chart-container">
-          <Line :data="commandFeedbackChartData" :options="chartOptions" />
-        </div>
-      </section>
-
-      <!-- 4. Bottom-Right: Oil Temperature -->
-      <section class="panel graph-panel temp-graph">
-        <header class="panel-header">
-          <h3>Oil Temperature</h3>
-        </header>
-        <div class="chart-container">
-          <Line :data="oilTempChartData" :options="chartOptions" />
-        </div>
-      </section>
+      </div>
     </div>
 
     <!-- MODAL 1: Recording Duration & Slide to Confirm -->
@@ -796,29 +797,78 @@ onBeforeUnmount(() => {
       </div>
     </Dialog>
 
-    <!-- MODAL 2: Persistent Recording Finished Popup -->
+    <!-- MODAL 2: Recording finished, choose what to keep -->
     <Dialog
-      :visible="recordFinishedDialog"
-      @update:visible="recordFinishedDialog = $event"
-      header="Recording Session Completed"
+      :visible="sessionDialog"
+      header="Recording Finished"
       :modal="true"
       :closable="false"
-      :style="{ width: '26rem' }"
+      :style="{ width: '32rem' }"
     >
-      <div class="finished-modal-content">
-        <i class="pi pi-check-circle success-icon"></i>
-        <h4>Telemetry Logging Complete</h4>
-        <p>
-          Successfully captured and persisted
-          <strong>{{ finishedSampleCount }} samples</strong> to the database.
-        </p>
+      <div v-if="session" class="session-body">
+        <div class="session-summary">
+          <i class="pi pi-check-circle success-icon"></i>
+          <div>
+            <h4>{{ session.samples.length }} samples captured</h4>
+            <p>
+              {{ formatDateTime(session.startedAt) }} &middot; {{ sessionDuration }} s
+              <template v-if="session.reason === 'hpu'"> &middot; stopped by HPU Stop</template>
+              <template v-else-if="session.reason === 'manual'"> &middot; stopped early</template>
+            </p>
+            <p class="session-ref">
+              {{ session.job ? `${session.job.job_number} — ${session.job.job_name}` : "Manual testing (no reference)" }}
+            </p>
+          </div>
+        </div>
+
+        <div class="session-actions">
+          <button
+            type="button"
+            class="session-option"
+            :class="{ done: sessionState.saved }"
+            :disabled="sessionState.saved || sessionState.saving"
+            @click="saveSessionAsRecord"
+          >
+            <i :class="sessionState.saving ? 'pi pi-spin pi-spinner' : sessionState.saved ? 'pi pi-check' : 'pi pi-database'"></i>
+            <span class="opt-text">
+              <strong>{{ sessionState.saved ? "Saved as Record" : "Save as Record" }}</strong>
+              <small>Official record, selectable in Generate Report.</small>
+            </span>
+          </button>
+          <button type="button" class="session-option" :class="{ done: sessionState.pdf }" @click="downloadSessionPdf">
+            <i :class="sessionState.pdf ? 'pi pi-check' : 'pi pi-file-pdf'"></i>
+            <span class="opt-text">
+              <strong>Download Raw Data PDF</strong>
+              <small>Session info, charts and every sample. Not stored in the database.</small>
+            </span>
+          </button>
+          <button type="button" class="session-option" :class="{ done: sessionState.csv }" @click="exportSessionCSV">
+            <i :class="sessionState.csv ? 'pi pi-check' : 'pi pi-download'"></i>
+            <span class="opt-text">
+              <strong>Export CSV</strong>
+              <small>All signals, one row per second.</small>
+            </span>
+          </button>
+        </div>
+
+        <div v-if="confirmDiscard" class="discard-warning">
+          <i class="pi pi-exclamation-triangle"></i>
+          <span>Nothing has been saved or downloaded. Closing now discards this session. It cannot be recovered.</span>
+        </div>
       </div>
       <template #footer>
         <Button
-          label="OK"
-          icon="pi pi-check"
-          class="w-full"
-          @click="recordFinishedDialog = false"
+          v-if="confirmDiscard"
+          label="Discard Session"
+          icon="pi pi-trash"
+          severity="danger"
+          @click="discardSession"
+        />
+        <Button v-else label="Discard" icon="pi pi-trash" severity="danger" text @click="confirmDiscard = true" />
+        <Button
+          :label="confirmDiscard ? 'Back' : 'Done'"
+          :icon="confirmDiscard ? 'pi pi-arrow-left' : 'pi pi-check'"
+          @click="confirmDiscard ? (confirmDiscard = false) : closeSessionDialog()"
         />
       </template>
     </Dialog>
@@ -849,8 +899,31 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  max-width: 440px;
+  max-width: 680px;
   flex: 1;
+  min-width: 0;
+}
+.mode-switch {
+  flex-shrink: 0;
+}
+.mode-switch :deep(.p-togglebutton) {
+  padding: 0.3rem 0.65rem;
+  font-size: 0.78rem;
+}
+.manual-note {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+.option-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+.option-row small {
+  color: var(--text-muted);
 }
 .valve-search {
   flex: 1;
@@ -966,11 +1039,8 @@ onBeforeUnmount(() => {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: 280px minmax(0, 1fr) minmax(0, 1fr);
-  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
-  grid-template-areas:
-    "sidebar pressure flow"
-    "sidebar command temp";
+  grid-template-columns: 280px minmax(0, 1fr);
+  grid-template-areas: "sidebar charts";
   gap: 0.85rem;
 }
 .sidebar-column {
@@ -1047,10 +1117,83 @@ onBeforeUnmount(() => {
 .export-btn {
   width: 100%;
 }
-.pressure-graph { grid-area: pressure; }
-.flow-graph { grid-area: flow; }
-.command-graph { grid-area: command; }
-.temp-graph { grid-area: temp; }
+/* Charts area: toolbar + 1-4 charts */
+.charts-area {
+  grid-area: charts;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  min-height: 0;
+  min-width: 0;
+}
+.charts-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.3rem 0.75rem;
+  flex-shrink: 0;
+}
+.toolbar-label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-color);
+}
+.toolbar-hint {
+  margin-left: auto;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+.count-dropdown {
+  min-width: 110px;
+}
+.charts-grid {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  gap: 0.85rem;
+}
+.charts-grid.count-1 {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+.charts-grid.count-2 {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+}
+.charts-grid.count-3,
+.charts-grid.count-4 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+}
+.charts-grid.count-3 .chart-3 {
+  grid-column: 1 / span 2;
+}
+.chart-header {
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.axis-pickers {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.axis-label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  margin-left: 0.2rem;
+}
+.axis-dropdown {
+  min-width: 0;
+  width: 150px;
+}
+.swap-btn {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+}
 .graph-panel {
   display: flex;
   flex-direction: column;
@@ -1088,12 +1231,14 @@ onBeforeUnmount(() => {
   align-items: center;
   min-width: 120px;
 }
+.header-dropdown :deep(.p-select-label),
 .header-dropdown :deep(.p-dropdown-label) {
   padding: 0 0.5rem;
   font-size: 0.75rem;
   display: flex;
   align-items: center;
 }
+.header-dropdown :deep(.p-select-dropdown),
 .header-dropdown :deep(.p-dropdown-trigger) {
   width: 28px;
 }
@@ -1177,28 +1322,10 @@ onBeforeUnmount(() => {
 }
 
 /* Completion Dialog Styles */
-.finished-modal-content {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
-  padding: 1.5rem 0 1rem;
-  gap: 0.5rem;
-}
 .success-icon {
   font-size: 3.2rem;
   color: #00c8f7;
   margin-bottom: 0.5rem;
-}
-.finished-modal-content h4 {
-  margin: 0;
-  font-size: 1.15rem;
-  color: var(--text-color);
-}
-.finished-modal-content p {
-  margin: 0;
-  color: var(--text-muted);
-  font-size: 0.88rem;
 }
 
 .manual-panel {
@@ -1228,7 +1355,7 @@ onBeforeUnmount(() => {
   border-radius: 4px;
   border: 1px solid transparent;
 }
-/* The command that is currently plotted in Command vs Feedback */
+/* A manual command that is plotted in one of the visible charts */
 .manual-field.active {
   border-color: var(--rexroth-6);
   background: rgba(0, 200, 247, 0.08);
@@ -1238,10 +1365,118 @@ onBeforeUnmount(() => {
   padding: 0.3rem 0.5rem;
   font-size: 0.82rem;
 }
-.manual-tag {
-  margin-left: 0.5rem;
-  font-size: 0.68rem;
-  font-weight: 600;
+
+.manual-info {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  line-height: 1.35;
+}
+.manual-info i {
+  margin-top: 0.15rem;
+  color: var(--primary-color);
+}
+.live-value-item .value small {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  font-weight: normal;
+}
+
+/* Recording finished dialog */
+.session-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding-top: 0.25rem;
+}
+.session-summary {
+  display: flex;
+  gap: 0.85rem;
+  align-items: center;
+}
+.session-summary .success-icon {
+  font-size: 2.4rem;
+  margin: 0;
+}
+.session-summary h4 {
+  margin: 0 0 0.2rem;
+  font-size: 1.05rem;
+  color: var(--text-color);
+}
+.session-summary p {
+  margin: 0;
+  font-size: 0.8rem;
   color: var(--text-muted);
 }
-</style>
+.session-summary .session-ref {
+  margin-top: 0.15rem;
+  font-weight: 600;
+  color: var(--text-color);
+}
+.session-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.session-option {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.65rem 0.8rem;
+  background: transparent;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  color: var(--text-color);
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+.session-option:hover:not(:disabled) {
+  border-color: var(--primary-color);
+  background: rgba(0, 200, 247, 0.06);
+}
+.session-option:disabled {
+  cursor: default;
+}
+.session-option i {
+  font-size: 1.2rem;
+  color: var(--primary-color);
+  width: 1.4rem;
+  text-align: center;
+}
+.session-option.done {
+  border-color: #00c8f7;
+}
+.session-option.done i {
+  color: #00a3c8;
+}
+.opt-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+.opt-text strong {
+  font-size: 0.86rem;
+}
+.opt-text small {
+  font-size: 0.74rem;
+  color: var(--text-muted);
+}
+.discard-warning {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+  padding: 0.6rem 0.75rem;
+  border-radius: 6px;
+  background: rgba(237, 0, 7, 0.08);
+  border: 1px solid rgba(237, 0, 7, 0.4);
+  color: #be090f;
+  font-size: 0.8rem;
+}
+.p-dark .discard-warning {
+  color: #ff8a8d;
+}
+</style>

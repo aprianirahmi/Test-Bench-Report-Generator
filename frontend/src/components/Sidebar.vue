@@ -50,6 +50,11 @@ function handleLogout() {
         <span v-if="!collapsed">Valve Details</span>
       </router-link>
 
+      <router-link to="/repair-jobs" class="menu-item" active-class="active">
+        <i class="pi pi-wrench"></i>
+        <span v-if="!collapsed">Repair Job List</span>
+      </router-link>
+
       <router-link to="/records" class="menu-item" active-class="active">
         <i class="pi pi-database"></i>
         <span v-if="!collapsed">Records</span>

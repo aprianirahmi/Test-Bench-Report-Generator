@@ -20,6 +20,7 @@ const pageTitle = computed(() => {
     case 'valve-list': return 'Valve Database'
     case 'valve-details-search':
     case 'valve-details': return 'Valve Details'
+    case 'repair-jobs': return 'Repair Job List'
     case 'records': return 'Test Workspace'
     case 'settings': return 'System Settings'
     case 'generate-report': return 'Generate Report'
@@ -106,4 +107,4 @@ const pageTitle = computed(() => {
 .profile i {
   font-size: 1.6rem;
 }
-</style>
+</style>

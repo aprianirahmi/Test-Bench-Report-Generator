@@ -109,11 +109,6 @@ function viewDetail(valve) {
   router.push({ name: 'valve-details', params: { id: valve.id } })
 }
 
-function goToTest(valve) {
-  valveStore.selectValve(valve)
-  router.push({ name: 'records', params: { id: valve.id } })
-}
-
 async function handleSubmit() {
   if (!validateForm()) {
     toast.add({ severity: 'warn', summary: 'Incomplete Form', detail: 'Please fill in all mandatory fields.', life: 3000 })
@@ -240,7 +235,6 @@ onMounted(fetchValves)
         <Column header="Actions" :exportable="false" style="min-width: 140px; text-align: right">
           <template #body="{ data }">
             <div class="action-buttons">
-              <Button icon="pi pi-chart-line" severity="info" text title="Test in Workspace" @click="goToTest(data)" />
               <Button icon="pi pi-eye" severity="secondary" text title="View Details" @click="viewDetail(data)" />
               <Button v-if="authStore.isAdmin" icon="pi pi-pencil" severity="secondary" text title="Edit" @click="openEditDialog(data)" />
               <Button v-if="authStore.isAdmin" icon="pi pi-trash" severity="danger" text title="Delete" @click="confirmDelete(data)" />
@@ -456,4 +450,4 @@ onMounted(fetchValves)
 .w-full {
   width: 100%;
 } 
-</style>
+</style>
