@@ -6,7 +6,7 @@ import Dropdown from "primevue/dropdown";
 import Button from "primevue/button";
 import { useToast } from "primevue/usetoast";
 import rexrothLogo from "../assets/Bosch_Rexroth-Logo.wine.svg";
-import { BASE_SENSORS, LEGACY_SENSORS, TIME_KEY, axisOptions, normaliseCustom, sensorLabel, toNumberOrNull } from "../utils/sensors";
+import { BASE_SENSORS, LEGACY_SENSORS, TIME_KEY, axisOptions, discoverSensors, normaliseCustom, sensorLabel, toNumberOrNull } from "../utils/sensors";
 import { buildChartData, buildChartOptions, chartTitle, findSensor, isTimeChart } from "../utils/chartBuild";
 import { LIGHT_CHART } from "../utils/chartTheme";
 import { formatDate, formatDateTime, repairJobLabel } from "../utils/format";
@@ -133,26 +133,27 @@ function hasData(key) {
   return parsedTelemetry.value.some((d) => toNumberOrNull(d[key]) !== null);
 }
 
-// Sensors in this record: fixed channels, the custom sensors as they were
-// named when recorded, and the generic fields of older records. Only those
-// with at least one value are offered.
+// Sensors in this record: fixed channels, every other sensor as it was named
+// when recorded (custom sensors and auto-discovered fields), and the generic
+// fields of older records. Only those with at least one value are offered.
 const currentCustom = ref([]);
 const recordCatalog = computed(() => {
-  const custom = normaliseCustom(recordMeta.value.sensors);
-  // A custom sensor missing from the record's own list falls back to its
-  // current name in Settings, then to its key.
-  const known = new Set(custom.map((c) => c.key));
-  for (const c of normaliseCustom(currentCustom.value)) {
-    if (!known.has(c.key)) {
-      custom.push(c);
-      known.add(c.key);
-    }
-  }
-  const keys = new Set(parsedTelemetry.value.flatMap((d) => Object.keys(d)));
-  for (const k of keys) {
-    if (/^custom_\d+$/.test(k) && !known.has(k)) custom.push({ key: k, label: k, unit: "", group: "Custom" });
-  }
-  return [...BASE_SENSORS, ...custom, ...LEGACY_SENSORS].filter((s) => hasData(s.key));
+  const fixed = [...BASE_SENSORS, ...LEGACY_SENSORS];
+  const fixedKeys = new Set(fixed.map((s) => s.key));
+  const extra = [];
+  const known = new Set();
+  const add = (c) => {
+    if (!c || !c.key || fixedKeys.has(c.key) || known.has(c.key)) return;
+    known.add(c.key);
+    const group = c.group || (/^custom_\d+$/.test(c.key) ? "Custom" : "Other");
+    extra.push({ key: c.key, label: c.label || c.key, unit: c.unit || "", group });
+  };
+  // 1. names stored with the record, 2. current names in Settings for custom
+  // sensors the record does not name, 3. any other field found in the samples.
+  for (const c of Array.isArray(recordMeta.value.sensors) ? recordMeta.value.sensors : []) add(c);
+  for (const c of normaliseCustom(currentCustom.value)) add(c);
+  for (const c of discoverSensors(parsedTelemetry.value, [...fixed, ...extra])) add(c);
+  return [...BASE_SENSORS, ...extra, ...LEGACY_SENSORS].filter((s) => hasData(s.key));
 });
 
 // --- Verification channels ---

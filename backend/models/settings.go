@@ -17,6 +17,9 @@ type Settings struct {
 	FlowNode1     string `json:"flow_node_1"`
 	FlowNode2     string `json:"flow_node_2"`
 
+	// Oil temperature (tank or return line), shown as "Oil Temp" on Records
+	OilTempNodeID string `json:"oil_temp_node_id"`
+
 	// Valve Actuation & Feedback Channels 1 - 6
 	CommandNode1  string `json:"command_node_1"`
 	FeedbackNode1 string `json:"feedback_node_1"`

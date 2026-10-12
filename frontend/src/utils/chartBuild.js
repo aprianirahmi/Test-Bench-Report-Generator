@@ -84,8 +84,10 @@ export function buildChartOptions(cfg, catalog, theme, { compact = false, animat
     animation: animate ? undefined : false,
     interaction: time ? { intersect: false, mode: "index" } : { intersect: false, mode: "nearest" },
     plugins: {
+      // X-Y charts already name both signals in the axis titles, so the
+      // legend would repeat the Y label; only time charts show it.
       legend: {
-        display: legend,
+        display: legend && time,
         position: "bottom",
         labels: { color: axisColor, boxWidth: 10, boxHeight: 3, usePointStyle: true, padding: 6, font: { size: fontSize } },
       },

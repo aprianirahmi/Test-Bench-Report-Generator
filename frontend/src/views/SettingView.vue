@@ -187,6 +187,22 @@
               </div>
             </div>
           </div>
+
+          <!-- Oil Temperature -->
+          <div class="node-field-group">
+            <div class="field-meta">
+              <label>Oil Temperature Node ID (&deg;C)</label>
+              <span class="live-dot" :class="{ ok: isLiveNode('oil_temp') }"></span>
+            </div>
+            <div class="node-input-row">
+              <div class="live-pill">{{ liveValues.oil_temp ?? '-' }}</div>
+              <InputText
+                v-model="settings.oil_temp_node_id"
+                placeholder="ns=2;s=testbench/sensors/oil_temp"
+                class="p-inputtext-sm node-input"
+              />
+            </div>
+          </div>
         </section>
       </div>
 
@@ -282,7 +298,7 @@
           </div>
 
           <p v-if="!customNodes.length" class="custom-empty">
-            No custom sensors yet. Add one to record an extra signal (for example oil temperature or pilot pressure)
+            No custom sensors yet. Add one to record an extra signal (for example pilot pressure or tank level)
             and select it as a chart axis in the Test Workspace.
           </p>
           <p class="custom-hint">
@@ -316,6 +332,7 @@ const liveValues = reactive({
   pressure_2: "-",
   flow_1: "-",
   flow_2: "-",
+  oil_temp: "-",
   command_1: "-", feedback_1: "-",
   command_2: "-", feedback_2: "-",
   command_3: "-", feedback_3: "-",
@@ -369,6 +386,7 @@ const settings = reactive({
   pressure_node_2: "",
   flow_node_1: "ns=2;s=testbench/sensors/flow",
   flow_node_2: "",
+  oil_temp_node_id: "",
   command_node_1: "ns=2;s=testbench/sensors/command",
   feedback_node_1: "ns=2;s=testbench/sensors/feedback",
   command_node_2: "", feedback_node_2: "",
@@ -393,6 +411,7 @@ async function pollLiveTelemetry() {
       liveValues.pressure_2 = d.pressure_2 != null ? Number(d.pressure_2).toFixed(1) : "-"
       liveValues.flow_1 = d.flow != null ? Number(d.flow).toFixed(1) : "-"
       liveValues.flow_2 = d.flow_2 != null ? Number(d.flow_2).toFixed(1) : "-"
+      liveValues.oil_temp = d.oil_temp != null ? Number(d.oil_temp).toFixed(1) : "-"
 
       liveValues.command_1 = d.command != null ? Number(d.command).toFixed(1) : "-"
       liveValues.feedback_1 = d.feedback != null ? Number(d.feedback).toFixed(1) : "-"
@@ -434,7 +453,8 @@ async function fetchSettings() {
       }
     }
     const statusRes = await api.get("/opcua/status")
-    isConnected.value = statusRes.data?.connected || false
+    // The backend reports the OPC UA server state as "server".
+    isConnected.value = Boolean(statusRes.data?.server ?? statusRes.data?.connected)
   } catch (err) {
     console.error("Failed to load settings:", err)
   }

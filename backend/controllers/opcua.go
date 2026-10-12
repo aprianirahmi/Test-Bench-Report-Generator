@@ -207,6 +207,7 @@ func GetOpcData(db *gorm.DB) gin.HandlerFunc {
 		p2 := readNode(s.PressureNode2)
 		f1 := readNode(s.FlowNode1)
 		f2 := readNode(s.FlowNode2)
+		oilTemp := readNode(s.OilTempNodeID)
 
 		cmd1 := readNode(s.CommandNode1)
 		fb1 := readNode(s.FeedbackNode1)
@@ -236,6 +237,7 @@ func GetOpcData(db *gorm.DB) gin.HandlerFunc {
 			"pressure_2": p2,
 			"flow_1":     f1,
 			"flow_2":     f2,
+			"oil_temp":   oilTemp,
 
 			// Channels 1 - 6
 			"command_1": cmd1, "feedback_1": fb1,

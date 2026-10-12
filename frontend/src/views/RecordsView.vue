@@ -9,6 +9,7 @@ import {
   DEFAULT_CHARTS,
   TIME_KEY,
   axisOptions,
+  discoverSensors,
   liveCatalog,
   sensorLabel,
   toNumberOrNull,
@@ -76,7 +77,11 @@ const recordingStartedAt = ref(null);
 
 // --- Sensors and chart layout ---
 const customSensors = ref([]);
-const catalog = computed(() => liveCatalog(customSensors.value));
+// Numeric fields of /api/opcua/data that no catalogue lists yet (a new
+// backend channel, or a custom sensor added in Settings since the last
+// catalogue refresh). They join the axis dropdowns on the next poll.
+const discovered = ref([]);
+const catalog = computed(() => liveCatalog(customSensors.value, discovered.value));
 const xOptions = computed(() => axisOptions(catalog.value, { includeTime: true }));
 const yOptions = computed(() => axisOptions(catalog.value));
 
@@ -126,6 +131,7 @@ const liveTiles = [
   { key: "pressure_2", label: "Pressure 2", unit: "bar" },
   { key: "flow_1", label: "Flow 1", unit: "L/min" },
   { key: "flow_2", label: "Flow 2", unit: "L/min" },
+  { key: "oil_temp", label: "Oil Temp", unit: "\u00b0C" },
 ];
 function tileValue(key) {
   const v = toNumberOrNull(latest.value[key]);
@@ -377,12 +383,38 @@ async function loadJobs() {
   }
 }
 
+// Keeps the axis dropdowns in step with what the backend actually sends.
+// New fields are added at once; fields that disappear (a custom sensor
+// removed in Settings) are dropped. A new custom_N key also triggers a
+// catalogue refresh so it shows its Settings name instead of "Custom N".
+function trackSensors(d) {
+  const present = discovered.value.filter((s) => s.key in d);
+  const fresh = discoverSensors([d], liveCatalog(customSensors.value, present));
+  if (fresh.length || present.length !== discovered.value.length) discovered.value = [...present, ...fresh];
+  const knownCustom = new Set(customSensors.value.map((c) => c.key));
+  const customKeys = Object.keys(d).filter((k) => /^custom_\d+$/.test(k));
+  const changed = customKeys.some((k) => !knownCustom.has(k)) || [...knownCustom].some((k) => !(k in d));
+  if (changed) refreshCustomSensors();
+}
+
+let lastCatalogRefresh = 0;
+function refreshCustomSensors(force = false) {
+  const now = Date.now();
+  if (!force && now - lastCatalogRefresh < 5000) return;
+  lastCatalogRefresh = now;
+  loadCustomSensors();
+}
+// Renames made in Settings (also from another PC) arrive within this period.
+const CATALOG_REFRESH_MS = 15000;
+let catalogInterval = null;
+const onWindowFocus = () => refreshCustomSensors(true);
+
 async function loadCustomSensors() {
   try {
     const res = await fetchSensorCatalog();
     customSensors.value = Array.isArray(res.data?.custom) ? res.data.custom : [];
   } catch (error) {
-    customSensors.value = [];
+    /* keep the last known names; a later refresh will retry */
   }
 }
 
@@ -418,7 +450,15 @@ async function startValve() {
     controlStatus.value = "active";
     toast.add({ severity: "success", summary: "HPU Active", detail: "Output signal engaged.", life: 3000 });
   } catch (error) {
-    toast.add({ severity: "error", summary: "Start Failed", detail: "Failed to engage HPU.", life: 4000 });
+    // Show the backend's reason (e.g. the OPC UA status) so the operator can tell
+    // a wrong Node ID or a read-only node from a lost connection.
+    const reason = error.response?.data?.error || error.message || "";
+    toast.add({
+      severity: "error",
+      summary: "Start Failed",
+      detail: reason ? `Failed to engage HPU: ${reason}` : "Failed to engage HPU.",
+      life: 8000,
+    });
   } finally {
     isStarting.value = false;
   }
@@ -433,7 +473,13 @@ async function stopValve() {
     if (isRecording.value) stopRecordingSession("hpu");
     toast.add({ severity: "warn", summary: "HPU Stopped", detail: "Output signal disengaged.", life: 3000 });
   } catch (error) {
-    toast.add({ severity: "error", summary: "Stop Failed", detail: "Failed to disengage HPU.", life: 4000 });
+    const reason = error.response?.data?.error || error.message || "";
+    toast.add({
+      severity: "error",
+      summary: "Stop Failed",
+      detail: reason ? `Failed to disengage HPU: ${reason}` : "Failed to disengage HPU.",
+      life: 8000,
+    });
   } finally {
     isStopping.value = false;
   }
@@ -444,10 +490,13 @@ async function pollLiveData() {
   const timeStr = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}:${String(now.getSeconds()).padStart(2, "0")}`;
 
   let d = {};
+  let ok = false;
   try {
     const res = await fetchOpcData();
     d = res.data || {};
+    ok = true;
   } catch (e) {}
+  if (ok) trackSensors(d);
 
   // One sample holds every sensor, so any X/Y pair can be drawn now or later
   // in the report. Unconfigured nodes come back as null and stay null.
@@ -502,6 +551,9 @@ onMounted(async () => {
   }
   if (jobStore.selectedJob) query.value = jobStore.selectedJob;
   liveDataInterval = setInterval(pollLiveData, 1000);
+  lastCatalogRefresh = Date.now();
+  catalogInterval = setInterval(() => refreshCustomSensors(true), CATALOG_REFRESH_MS);
+  window.addEventListener("focus", onWindowFocus);
   window.addEventListener("mousemove", onSlideMove);
   window.addEventListener("mouseup", onSlideEnd);
   window.addEventListener("touchmove", onSlideMove);
@@ -511,6 +563,8 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   if (liveDataInterval) clearInterval(liveDataInterval);
   if (countdownInterval) clearInterval(countdownInterval);
+  if (catalogInterval) clearInterval(catalogInterval);
+  window.removeEventListener("focus", onWindowFocus);
   window.removeEventListener("mousemove", onSlideMove);
   window.removeEventListener("mouseup", onSlideEnd);
   window.removeEventListener("touchmove", onSlideMove);
@@ -1024,7 +1078,9 @@ onBeforeUnmount(() => {
 }
 .live-value-item .label {
   font-size: 0.65rem;
-  color: var(--text-muted);
+  font-weight: 700;
+  /* navy in light mode, white in dark mode */
+  color: var(--text-color);
   text-transform: uppercase;
 }
 .live-value-item .value {

@@ -217,14 +217,6 @@ onMounted(fetchJobs);
         <template #empty>
           <div class="empty-row">No repair jobs yet. Use "Add Repair Job" to create one.</div>
         </template>
-        <Column header="Image" style="width: 65px">
-          <template #body="{ data }">
-            <div class="thumb-box">
-              <img v-if="data.image_path" :src="assetUrl(data.image_path)" class="thumb-img" alt="valve" />
-              <i v-else class="pi pi-image thumb-icon"></i>
-            </div>
-          </template>
-        </Column>
         <Column field="job_number" header="Job Number" sortable style="min-width: 120px">
           <template #body="{ data }">
             <span class="mono-bold">{{ data.job_number }}</span>

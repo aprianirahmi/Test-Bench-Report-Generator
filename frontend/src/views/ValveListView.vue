@@ -196,14 +196,6 @@ onMounted(fetchValves)
         scrollHeight="flex"
         class="valve-table"
       >
-        <Column header="Image" style="width: 65px">
-          <template #body="{ data }">
-            <div class="thumb-box">
-              <img v-if="data.image_path" :src="data.image_path" class="thumb-img" alt="valve" />
-              <i v-else class="pi pi-image thumb-icon"></i>
-            </div>
-          </template>
-        </Column>
         <Column field="part_number" header="Part Number" sortable style="min-width: 140px">
           <template #body="{ data }">
             <span class="mono-bold">{{ data.part_number }}</span>

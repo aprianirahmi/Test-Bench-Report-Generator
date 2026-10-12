@@ -61,7 +61,7 @@ function renderChartImage(samples, cfg, catalog, index, widthPx, heightPx) {
  * @param {Date} p.startedAt  recording start time
  */
 export function downloadRawDataPdf({ samples, charts, catalog, job, startedAt }) {
-  const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+  const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4", compress: true });
   const pageW = doc.internal.pageSize.getWidth();
   const pageH = doc.internal.pageSize.getHeight();
   const margin = 12;
