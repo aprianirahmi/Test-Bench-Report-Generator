@@ -93,17 +93,22 @@ func New(distFS fs.FS) (*gin.Engine, func(), error) {
 		// Test Records & Telemetry Logs
 		api.GET("/records", middleware.AuthRequired(), controllers.GetTestRecords(db))
 		api.POST("/records", middleware.AuthRequired(), controllers.SaveTestRecord(db))
+		api.PUT("/records/:id/report", middleware.AuthRequired(), controllers.SaveRecordReport(db))
+		api.DELETE("/records/:id", middleware.AuthRequired(), middleware.AdminOnly(), controllers.DeleteTestRecord(db))
+
+		// Unsaved recording of the logged-in user (autosave while recording).
+		api.GET("/recording-draft", middleware.AuthRequired(), controllers.GetRecordingDraft(db))
+		api.PUT("/recording-draft", middleware.AuthRequired(), controllers.SaveRecordingDraft(db))
+		api.DELETE("/recording-draft", middleware.AuthRequired(), controllers.DeleteRecordingDraft(db))
 
 		// System Settings
 		api.GET("/settings", middleware.AuthRequired(), middleware.AdminOnly(), controllers.GetSettings(db))
 		api.PUT("/settings", middleware.AuthRequired(), middleware.AdminOnly(), controllers.UpdateSettings(db))
 
-		// OPC UA Telemetry & Actuation
+		// OPC UA telemetry (read-only)
 		api.GET("/opcua/data", middleware.AuthRequired(), controllers.GetOpcData(db))
 		api.GET("/opcua/status", middleware.AuthRequired(), controllers.GetOpcStatus(db))
 		api.GET("/opcua/sensors", middleware.AuthRequired(), controllers.GetSensorCatalog(db))
-		api.POST("/ctrlx/start", middleware.AuthRequired(), controllers.StartOutput(db))
-		api.POST("/ctrlx/stop", middleware.AuthRequired(), controllers.StopOutput(db))
 	}
 
 	// Everything else is the embedded Vue app.

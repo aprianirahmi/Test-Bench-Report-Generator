@@ -35,18 +35,18 @@
             class="action-btn" />
         </div>
 
-        <!-- Module 2: Valve Database -->
-        <div class="action-card" @click="goToValveList">
+        <!-- Module 2: Repair Jobs -->
+        <div class="action-card" @click="goToRepairJobs">
           <div class="icon-wrapper">
             <i class="pi pi-server"></i>
           </div>
-          <h3>Valve Database</h3>
+          <h3>Repair Jobs</h3>
           <p>
-            Manage valve technical specifications, nominal limits, image
-            references, and PDF datasheets.
+            Manage repair jobs with valve specifications, image references,
+            PDF datasheets, and linked test records.
           </p>
           <Button
-            label="Open Catalog"
+            label="Open Repair Jobs"
             icon="pi pi-arrow-right"
             severity="secondary"
             outlined
@@ -86,8 +86,8 @@ function goToRecords() {
   router.push("/records");
 }
 
-function goToValveList() {
-  router.push("/valves");
+function goToRepairJobs() {
+  router.push("/repair-jobs");
 }
 
 function goToReport() {

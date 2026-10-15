@@ -58,20 +58,27 @@ export function uploadValveDatasheet(id, file) {
   });
 }
 
-export function uploadRepairJobImage(id, file) {
-  const formData = new FormData();
-  formData.append("image", file);
-  return api.post(`/repair-jobs/${id}/image`, formData, {
-    headers: { "Content-Type": undefined },
-  });
+// Repair job files are sent as base64 inside a JSON body. In the desktop app
+// the Gin router runs inside Wails (WebView2), and WebView2 does not pass the
+// file bytes of a multipart/form-data request to that handler: the file part
+// arrives empty. A JSON text body arrives intact, in the desktop app and in a
+// normal browser alike.
+async function fileToBase64(file) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
 }
 
-export function uploadRepairJobDatasheet(id, file) {
-  const formData = new FormData();
-  formData.append("datasheet", file);
-  return api.post(`/repair-jobs/${id}/datasheet`, formData, {
-    headers: { "Content-Type": undefined },
-  });
+export async function uploadRepairJobImage(id, file) {
+  return api.post(`/repair-jobs/${id}/image`, { filename: file.name, data: await fileToBase64(file) });
+}
+
+export async function uploadRepairJobDatasheet(id, file) {
+  return api.post(`/repair-jobs/${id}/datasheet`, { filename: file.name, data: await fileToBase64(file) });
 }
 
 // User-defined sensors (key, label, unit) from Settings, for any logged-in user.
@@ -79,16 +86,30 @@ export function fetchSensorCatalog() {
   return api.get("/opcua/sensors");
 }
 
-export function startOutput() {
-  return api.post("/ctrlx/start");
-}
-
-export function stopOutput() {
-  return api.post("/ctrlx/stop");
-}
-
 export function fetchOpcData() {
   return api.get("/opcua/data");
+}
+
+// Test records: delete (admin only) and the report outcome of a record.
+export function deleteTestRecord(id) {
+  return api.delete(`/records/${id}`);
+}
+
+export function saveRecordReport(id, { status, operator, docNumber }) {
+  return api.put(`/records/${id}/report`, { status, operator, doc_number: docNumber || "" });
+}
+
+// Unsaved recording of the logged-in user (autosave while recording).
+export function getRecordingDraft() {
+  return api.get("/recording-draft");
+}
+
+export function saveRecordingDraft(payload) {
+  return api.put("/recording-draft", { payload });
+}
+
+export function deleteRecordingDraft() {
+  return api.delete("/recording-draft");
 }
 
 export default api;

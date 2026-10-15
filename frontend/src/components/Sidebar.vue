@@ -33,26 +33,17 @@ function handleLogout() {
         <span v-if="!collapsed">Dashboard</span>
       </router-link>
 
-      <router-link to="/valves" class="menu-item" active-class="active">
-        <i class="pi pi-list"></i>
-        <span v-if="!collapsed">Valve List</span>
+      <router-link to="/repair-jobs" class="menu-item" :class="{ active: route.name === 'repair-jobs' }">
+        <i class="pi pi-wrench"></i>
+        <span v-if="!collapsed">Repair Job List</span>
       </router-link>
 
       <router-link
-        :to="{ name: 'valve-details-search' }"
+        :to="{ name: 'repair-job-details-search' }"
         class="menu-item"
-        :class="{
-          active:
-            route.name === 'valve-details-search' ||
-            route.name === 'valve-details',
-        }">
+        :class="{ active: route.name === 'repair-job-details-search' || route.name === 'repair-job-details' }">
         <i class="pi pi-info-circle"></i>
-        <span v-if="!collapsed">Valve Details</span>
-      </router-link>
-
-      <router-link to="/repair-jobs" class="menu-item" active-class="active">
-        <i class="pi pi-wrench"></i>
-        <span v-if="!collapsed">Repair Job List</span>
+        <span v-if="!collapsed">Repair Job Details</span>
       </router-link>
 
       <router-link to="/records" class="menu-item" active-class="active">

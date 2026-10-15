@@ -1,6 +1,12 @@
 <script setup>
-import { ref, computed, onMounted, nextTick, watch } from "vue";
-import api, { fetchSensorCatalog } from "../services/api";
+import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from "vue";
+import { useRoute } from "vue-router";
+import api, { fetchSensorCatalog, saveRecordReport } from "../services/api";
+import ConfirmDialog from "primevue/confirmdialog";
+import { useConfirm } from "primevue/useconfirm";
+import { useAuthStore } from "../stores/auth";
+import { confirmDeleteRecord } from "../utils/recordDelete";
+import { STATUS_OPTIONS } from "../utils/reportStatus";
 import InputText from "primevue/inputtext";
 import Dropdown from "primevue/dropdown";
 import Button from "primevue/button";
@@ -27,6 +33,8 @@ import {
 ChartJS.register(Title, Tooltip, Legend, LineElement, PointElement, LinearScale, CategoryScale, Filler);
 
 const toast = useToast();
+const confirm = useConfirm();
+const authStore = useAuthStore();
 
 // --- Form & history state ---
 const historicalRecords = ref([]);
@@ -35,12 +43,9 @@ const selectedSource = ref(null); // repair job id, MANUAL or LEGACY
 const selectedRecord = ref(null);
 const docNumber = ref("");
 const operatorName = ref("");
-const selectedStatus = ref("OK");
-const statusOptions = [
-  { label: "OK (Passed)", value: "OK" },
-  { label: "NOK (Failed)", value: "NOK" },
-  { label: "Requires Calibration", value: "CALIBRATION" },
-];
+// No default status: the operator has to choose it before a report is made.
+const selectedStatus = ref(null);
+const statusOptions = STATUS_OPTIONS;
 
 const MANUAL = "__manual";
 const LEGACY = "__legacy";
@@ -86,6 +91,14 @@ const recordOptions = computed(() => {
     });
 });
 
+// A record that already has a report shows its saved status, operator and
+// document number; a record without one starts empty.
+watch(selectedRecord, (r) => {
+  docNumber.value = r?.report_doc_number || "";
+  operatorName.value = r?.report_operator || "";
+  selectedStatus.value = r?.report_status || null;
+});
+
 watch(selectedSource, () => {
   // Newest record of the chosen source, so the preview fills immediately.
   selectedRecord.value = recordOptions.value[0]?.value || null;
@@ -129,6 +142,15 @@ const recordMeta = computed(() => {
   }
 });
 
+// Periods without sensor values noted while recording (PLC lost). Shown in
+// the report so empty stretches in the charts are explained.
+const gapNote = computed(() => {
+  const gaps = Array.isArray(recordMeta.value.gaps) ? recordMeta.value.gaps : [];
+  if (!gaps.length) return "";
+  const secs = Number(recordMeta.value.signal_lost_seconds) || gaps.reduce((a, g) => a + (Number(g.seconds) || 0), 0);
+  return `${gaps.length} interruption${gaps.length > 1 ? "s" : ""}, ${secs} s without sensor values`;
+});
+
 function hasData(key) {
   return parsedTelemetry.value.some((d) => toNumberOrNull(d[key]) !== null);
 }
@@ -137,7 +159,7 @@ function hasData(key) {
 // when recorded (custom sensors and auto-discovered fields), and the generic
 // fields of older records. Only those with at least one value are offered.
 const currentCustom = ref([]);
-const recordCatalog = computed(() => {
+const allCatalog = computed(() => {
   const fixed = [...BASE_SENSORS, ...LEGACY_SENSORS];
   const fixedKeys = new Set(fixed.map((s) => s.key));
   const extra = [];
@@ -153,8 +175,20 @@ const recordCatalog = computed(() => {
   for (const c of Array.isArray(recordMeta.value.sensors) ? recordMeta.value.sensors : []) add(c);
   for (const c of normaliseCustom(currentCustom.value)) add(c);
   for (const c of discoverSensors(parsedTelemetry.value, [...fixed, ...extra])) add(c);
-  return [...BASE_SENSORS, ...extra, ...LEGACY_SENSORS].filter((s) => hasData(s.key));
+  return [...BASE_SENSORS, ...extra, ...LEGACY_SENSORS];
 });
+// Sensors with at least one value: offered for verification.
+const recordCatalog = computed(() => allCatalog.value.filter((s) => hasData(s.key)));
+// Charts keep the layout chosen when recording, even for sensors that hold no
+// value, so a record with empty channels still shows its charts (empty).
+const metaChartKeys = computed(() => {
+  const charts = Array.isArray(recordMeta.value.charts) ? recordMeta.value.charts : [];
+  return new Set(charts.flatMap((c) => [c?.x, c?.y]).filter(Boolean));
+});
+const chartCatalog = computed(() => allCatalog.value.filter((s) => hasData(s.key) || metaChartKeys.value.has(s.key)));
+// False when every sensor in the record is empty (manual commands do not count):
+// the OPC UA nodes could not be read while recording.
+const recordHasData = computed(() => recordCatalog.value.some((s) => s.key !== "command_7" && s.key !== "command_8"));
 
 // --- Verification channels ---
 const pressureChannelOptions = computed(() =>
@@ -170,8 +204,8 @@ const flowChannel = ref(null);
 const chartCountOptions = [1, 2, 3, 4].map((n) => ({ label: `${n} chart${n > 1 ? "s" : ""}`, value: n }));
 const chartCount = ref(3);
 const chartConfigs = ref([]);
-const xOptions = computed(() => axisOptions(recordCatalog.value, { includeTime: true }));
-const yOptions = computed(() => axisOptions(recordCatalog.value));
+const xOptions = computed(() => axisOptions(chartCatalog.value, { includeTime: true }));
+const yOptions = computed(() => axisOptions(chartCatalog.value));
 
 function firstAvailable(keys) {
   return keys.find((k) => hasData(k)) || null;
@@ -179,7 +213,8 @@ function firstAvailable(keys) {
 
 function defaultChartsFor() {
   const fromMeta = Array.isArray(recordMeta.value.charts) ? recordMeta.value.charts : [];
-  const valid = fromMeta.filter((c) => c && (c.x === TIME_KEY || hasData(c.x)) && hasData(c.y)).slice(0, 4);
+  const known = (k) => k === TIME_KEY || chartCatalog.value.some((s) => s.key === k);
+  const valid = fromMeta.filter((c) => c && known(c.x) && known(c.y) && c.y !== TIME_KEY).slice(0, 4);
   if (valid.length) return valid.map((c) => ({ x: c.x, y: c.y }));
   // Older records: pressure, flow and command over time.
   const p = firstAvailable(["pressure", "pressure_1"]);
@@ -194,9 +229,9 @@ watch(selectedRecord, () => {
   // Keep 4 slots so raising the chart count has something sensible to show:
   // spare slots plot sensors not used yet, over time.
   const used = new Set(defaults.map((c) => c.y));
-  const spare = recordCatalog.value.map((s) => s.key).filter((k) => !used.has(k));
+  const spare = chartCatalog.value.map((s) => s.key).filter((k) => !used.has(k));
   const slots = [...defaults];
-  while (slots.length < 4) slots.push({ x: TIME_KEY, y: spare.shift() || defaults[0]?.y || recordCatalog.value[0]?.key || "pressure_1" });
+  while (slots.length < 4) slots.push({ x: TIME_KEY, y: spare.shift() || defaults[0]?.y || chartCatalog.value[0]?.key || "pressure_1" });
   chartConfigs.value = slots;
   chartCount.value = Math.max(1, defaults.length);
   pressureChannel.value = pressureChannelOptions.value[0]?.value || null;
@@ -206,10 +241,10 @@ watch(selectedRecord, () => {
 const reportCharts = computed(() =>
   chartConfigs.value.slice(0, chartCount.value).map((cfg, i) => ({
     cfg,
-    title: chartTitle(cfg, recordCatalog.value),
+    title: chartTitle(cfg, chartCatalog.value),
     component: isTimeChart(cfg) ? Line : Scatter,
-    data: buildChartData(parsedTelemetry.value, cfg, recordCatalog.value, { index: i }),
-    options: buildChartOptions(cfg, recordCatalog.value, LIGHT_CHART, { compact: true }),
+    data: buildChartData(parsedTelemetry.value, cfg, chartCatalog.value, { index: i }),
+    options: buildChartOptions(cfg, chartCatalog.value, LIGHT_CHART, { compact: true }),
   })),
 );
 
@@ -287,27 +322,124 @@ async function loadHistory() {
   }
 }
 
+const saving = ref(false);
+
+// The report outcome is saved on the record first, so the same status,
+// operator and document number are used every time the report is opened.
 async function generatePDF() {
-  if (!selectedRecord.value) {
+  const rec = selectedRecord.value;
+  if (!rec) {
     toast.add({ severity: "error", summary: "Missing Data", detail: "Please select a test record.", life: 3000 });
     return;
   }
-  if (!docNumber.value.trim()) {
-    docNumber.value = `DOC-${Date.now().toString().slice(-6)}`;
+  if (!operatorName.value.trim()) {
+    toast.add({ severity: "warn", summary: "Operator required", detail: "Enter the operator name.", life: 3500 });
+    return;
+  }
+  if (!selectedStatus.value) {
+    toast.add({ severity: "warn", summary: "Status required", detail: "Choose the final test status.", life: 3500 });
+    return;
+  }
+  saving.value = true;
+  try {
+    const res = await saveRecordReport(rec.id, {
+      status: selectedStatus.value,
+      operator: operatorName.value.trim(),
+      docNumber: docNumber.value.trim(),
+    });
+    // Update the record object in place, so the dropdown keeps its selection.
+    for (const k of ["recorded_by", "report_status", "report_operator", "report_doc_number", "reported_by", "reported_at"]) rec[k] = res.data[k];
+    docNumber.value = rec.report_doc_number;
+    operatorName.value = rec.report_operator;
+  } catch (error) {
+    const msg = error.response?.data?.error || "The report data could not be saved, so the report was not generated.";
+    toast.add({ severity: "error", summary: "Not Saved", detail: msg, life: 5000 });
+    return;
+  } finally {
+    saving.value = false;
   }
   await nextTick();
   window.print();
 }
 
-onMounted(loadHistory);
+function deleteSelectedRecord() {
+  const rec = selectedRecord.value;
+  if (!rec) return;
+  confirmDeleteRecord({
+    confirm,
+    toast,
+    record: rec,
+    label: formatDateTime(rec.created_at),
+    onDeleted: () => {
+      historicalRecords.value = historicalRecords.value.filter((r) => r.id !== rec.id);
+      // Newest remaining record of this source, or none.
+      selectedRecord.value = recordOptions.value[0]?.value || null;
+    },
+  });
+}
+
+// --- Preview size ---
+// The A4 page is scaled down to the width of the preview area, so it is shown
+// whole on a small screen; printing always uses the real size. The settings
+// panel can be hidden to give the preview the full width.
+const PAPER_PX = 793.7; // 210 mm at 96 dpi
+const panelOpen = ref(true);
+const viewerRef = ref(null);
+const paperRef = ref(null);
+const viewerWidth = ref(0);
+const paperHeight = ref(0);
+const previewScale = computed(() => {
+  if (!viewerWidth.value) return 1;
+  return Math.min(1, Math.max(0.4, (viewerWidth.value - 32) / PAPER_PX));
+});
+const scalerStyle = computed(() => ({
+  width: `${PAPER_PX * previewScale.value}px`,
+  height: paperHeight.value ? `${paperHeight.value * previewScale.value}px` : undefined,
+}));
+const paperStyle = computed(() => ({ transform: `scale(${previewScale.value})`, transformOrigin: "top left" }));
+let resizeObserver = null;
+function measure() {
+  if (viewerRef.value) viewerWidth.value = viewerRef.value.clientWidth;
+  if (paperRef.value) paperHeight.value = paperRef.value.offsetHeight;
+}
+
+// Opened from Repair Job Details with ?job=<id>&record=<id>: preselect that
+// job and record so the preview is shown straight away. Nothing is printed
+// until the user presses Generate Report here.
+const route = useRoute();
+async function preselectFromQuery() {
+  const jobId = Number(route.query.job);
+  if (!jobId || !repairJobs.value.some((j) => j.id === jobId)) return;
+  selectedSource.value = jobId;
+  await nextTick();
+  const recId = Number(route.query.record);
+  const match = recordOptions.value.find((o) => o.value.id === recId);
+  if (match) selectedRecord.value = match.value;
+}
+
+onMounted(async () => {
+  measure();
+  if (typeof ResizeObserver !== "undefined") {
+    resizeObserver = new ResizeObserver(measure);
+    if (viewerRef.value) resizeObserver.observe(viewerRef.value);
+    if (paperRef.value) resizeObserver.observe(paperRef.value);
+  }
+  await loadHistory();
+  await preselectFromQuery();
+});
+onBeforeUnmount(() => resizeObserver && resizeObserver.disconnect());
 </script>
 
 <template>
   <div class="report-generator-page">
+    <ConfirmDialog />
     <!-- LEFT: Controls (Hidden on Print) -->
-    <aside class="control-panel no-print">
+    <aside v-show="panelOpen" class="control-panel no-print">
       <header class="panel-header">
-        <h2>Report Configuration</h2>
+        <div class="panel-title">
+          <h2>Report Configuration</h2>
+          <Button icon="pi pi-angle-double-left" text rounded size="small" title="Hide settings (larger preview)" @click="panelOpen = false" />
+        </div>
         <p>Choose a repair job and its test record, then generate the PDF.</p>
       </header>
 
@@ -329,31 +461,43 @@ onMounted(loadHistory);
 
         <div class="field">
           <label for="report-record">Test Record</label>
-          <Dropdown
-            v-model="selectedRecord"
-            inputId="report-record"
-            :options="recordOptions"
-            optionLabel="label"
-            optionValue="value"
-            :placeholder="selectedSource === null ? 'Select a source first' : recordOptions.length ? 'Select test record' : 'No records for this source'"
-            :disabled="!recordOptions.length"
-            class="w-full"
-          />
+          <div class="record-row">
+            <Dropdown
+              v-model="selectedRecord"
+              inputId="report-record"
+              :options="recordOptions"
+              optionLabel="label"
+              optionValue="value"
+              :placeholder="selectedSource === null ? 'Select a source first' : recordOptions.length ? 'Select test record' : 'No records for this source'"
+              :disabled="!recordOptions.length"
+              class="record-dd"
+            />
+            <Button
+              v-if="authStore.isAdmin"
+              icon="pi pi-trash"
+              severity="danger"
+              outlined
+              title="Delete this test record"
+              :disabled="!selectedRecord"
+              @click="deleteSelectedRecord"
+            />
+          </div>
+          <small v-if="selectedRecord?.recorded_by" class="hint">Recorded by {{ selectedRecord.recorded_by }}</small>
         </div>
 
         <div class="field">
-          <label>Document Number (Optional)</label>
-          <InputText v-model="docNumber" placeholder="Leave empty to auto-generate" />
+          <label>Document Number</label>
+          <InputText v-model="docNumber" placeholder="Empty: assigned when the report is generated" />
         </div>
 
         <div class="field">
-          <label>Operator Name</label>
+          <label>Operator Name *</label>
           <InputText v-model="operatorName" placeholder="Enter operator name" />
         </div>
 
         <div class="field">
-          <label>Final Test Status</label>
-          <Dropdown v-model="selectedStatus" :options="statusOptions" optionLabel="label" optionValue="value" class="w-full" />
+          <label>Final Test Status *</label>
+          <Dropdown v-model="selectedStatus" :options="statusOptions" optionLabel="label" optionValue="value" placeholder="Choose status" class="w-full" />
         </div>
 
         <template v-if="selectedRecord && reference">
@@ -386,7 +530,7 @@ onMounted(loadHistory);
           </div>
         </template>
 
-        <template v-if="selectedRecord && recordCatalog.length">
+        <template v-if="selectedRecord && chartCatalog.length">
           <div class="config-heading">
             Report Charts
             <Dropdown
@@ -411,20 +555,37 @@ onMounted(loadHistory);
           </div>
         </template>
 
+        <div v-if="parsedTelemetry.length > 0 && !recordHasData" class="no-data-card">
+          <strong><i class="pi pi-exclamation-triangle"></i> No sensor values in this record</strong>
+          <span>
+            All {{ parsedTelemetry.length }} samples are empty, so the charts and the verification table stay blank.
+            The OPC UA nodes could not be read while recording: check the Node IDs in Settings, then record the test again.
+          </span>
+        </div>
         <div v-if="parsedTelemetry.length > 0" class="valve-summary-card">
           <strong>{{ parsedTelemetry.length }} Data Points Loaded</strong>
-          <span>Ready for rendering.</span>
+          <span>One sample per second, about {{ parsedTelemetry.length }} s of recording.</span>
         </div>
       </div>
 
       <div class="action-footer">
-        <Button label="Generate PDF Report" icon="pi pi-file-pdf" size="large" class="w-full" @click="generatePDF" />
+        <Button label="Generate PDF Report" icon="pi pi-file-pdf" size="large" class="w-full" :loading="saving" :disabled="!selectedRecord" @click="generatePDF" />
       </div>
     </aside>
 
     <!-- RIGHT: A4 Document Preview -->
-    <main class="document-viewer">
-      <div class="a4-paper" id="print-area">
+    <main ref="viewerRef" class="document-viewer">
+      <Button
+        v-if="!panelOpen"
+        class="panel-open-btn no-print"
+        icon="pi pi-angle-double-right"
+        label="Settings"
+        size="small"
+        severity="secondary"
+        @click="panelOpen = true"
+      />
+      <div class="paper-scaler" :style="scalerStyle">
+      <div ref="paperRef" class="a4-paper" id="print-area" :style="paperStyle">
         <!-- Report Header -->
         <header class="report-header">
           <div class="brand-block">
@@ -432,7 +593,7 @@ onMounted(loadHistory);
           </div>
           <div class="doc-title">
             <h2>VALVE TEST REPORT</h2>
-            <span class="doc-id">{{ docNumber || "Please input doc number" }}</span>
+            <span class="doc-id">{{ docNumber || "Assigned when generated" }}</span>
           </div>
         </header>
 
@@ -453,11 +614,15 @@ onMounted(loadHistory);
               <span class="label">Test Mode:</span>
               <span class="value">{{ testModeText }} &middot; ValveDAX</span>
             </div>
+            <div v-if="gapNote" class="info-row">
+              <span class="label">Data Gaps:</span>
+              <span class="value">{{ gapNote }}</span>
+            </div>
           </div>
           <div class="info-column status-column">
             <div class="info-row">
               <span class="label">Overall Status:</span>
-              <span class="status-badge" :class="selectedStatus">{{ selectedStatus }}</span>
+              <span class="status-badge" :class="selectedStatus">{{ selectedStatus || "-" }}</span>
             </div>
           </div>
         </section>
@@ -644,6 +809,7 @@ onMounted(loadHistory);
           </div>
         </section>
       </div>
+      </div>
     </main>
   </div>
 </template>
@@ -658,7 +824,7 @@ onMounted(loadHistory);
 
 /* Control Panel */
 .control-panel {
-  width: 400px;
+  width: 290px;
   background: var(--card-bg);
   border: 1px solid var(--border-color);
   border-radius: 8px;
@@ -668,12 +834,18 @@ onMounted(loadHistory);
 }
 
 .panel-header {
-  padding: 1.5rem 1.5rem 1rem;
+  padding: 1rem 1rem 0.75rem;
   border-bottom: 1px solid var(--border-color);
+}
+.panel-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
 }
 .panel-header h2 {
   margin: 0;
-  font-size: 1.25rem;
+  font-size: 1.05rem;
   color: var(--text-color);
 }
 .panel-header p {
@@ -683,10 +855,10 @@ onMounted(loadHistory);
 }
 
 .form-grid {
-  padding: 1.5rem;
+  padding: 1rem;
   display: flex;
   flex-direction: column;
-  gap: 1.25rem;
+  gap: 0.9rem;
   overflow-y: auto;
   flex: 1;
 }
@@ -718,20 +890,24 @@ onMounted(loadHistory);
 }
 .field-pair {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr;
   gap: 0.6rem;
 }
+/* Narrow settings panel: X and Y axis stack, the chart number spans both. */
 .chart-config-row {
   display: grid;
-  grid-template-columns: 1.4rem minmax(0, 1fr) minmax(0, 1fr);
-  gap: 0.5rem;
+  grid-template-columns: 1.4rem minmax(0, 1fr);
+  gap: 0.35rem 0.5rem;
   align-items: end;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px dashed var(--border-color);
 }
 .chart-no {
+  grid-row: 1 / span 2;
+  align-self: center;
   font-size: 0.8rem;
   font-weight: 700;
   color: var(--primary-color);
-  padding-bottom: 0.55rem;
 }
 .chart-config-row :deep(.p-select-label) {
   overflow: hidden;
@@ -747,6 +923,28 @@ onMounted(loadHistory);
   font-size: 0.7rem;
 }
 
+.no-data-card {
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid #f59e0b;
+  padding: 0.75rem;
+  border-radius: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-bottom: 0.75rem;
+}
+.no-data-card strong {
+  color: #92400e;
+  font-size: 0.9rem;
+}
+.no-data-card span {
+  font-size: 0.75rem;
+  color: var(--text-color);
+  line-height: 1.4;
+}
+.p-dark .no-data-card strong {
+  color: #fcd34d;
+}
 .valve-summary-card {
   background: rgba(0, 200, 247, 0.08);
   border: 1px solid #00c8f7;
@@ -765,8 +963,30 @@ onMounted(loadHistory);
   color: var(--text-muted);
 }
 
+.record-row {
+  display: flex;
+  gap: 0.4rem;
+}
+.record-dd {
+  flex: 1;
+  min-width: 0;
+}
+.hint {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+.panel-open-btn {
+  position: absolute;
+  top: 0.6rem;
+  left: 0.6rem;
+  z-index: 5;
+}
+.paper-scaler {
+  flex-shrink: 0;
+}
+
 .action-footer {
-  padding: 1.5rem;
+  padding: 1rem;
   border-top: 1px solid var(--border-color);
 }
 .w-full {
@@ -786,10 +1006,14 @@ onMounted(loadHistory);
 /* Document Viewer / A4 Paper */
 .document-viewer {
   flex: 1;
+  min-width: 0;
+  position: relative;
   overflow-y: auto;
+  overflow-x: hidden;
   display: flex;
   justify-content: center;
-  padding: 1.5rem 1rem;
+  align-items: flex-start;
+  padding: 1rem;
   background: rgba(0, 0, 0, 0.04);
 }
 
@@ -1059,7 +1283,13 @@ h3 {
     z-index: 9999;
   }
 
+  .paper-scaler {
+    width: auto !important;
+    height: auto !important;
+  }
+
   .a4-paper {
+    transform: none !important;
     box-shadow: none !important;
     border: none !important;
     margin: 0 !important;

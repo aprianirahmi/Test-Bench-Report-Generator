@@ -222,9 +222,6 @@ func GetOpcData(db *gorm.DB) gin.HandlerFunc {
 		cmd6 := readNode(s.CommandNode6)
 		fb6 := readNode(s.FeedbackNode6)
 
-		out := readNode(s.OutputTriggerNodeID)
-		hpu := readNode(s.HpuStatusNodeID)
-
 		resp := gin.H{
 			// Primary channel aliases
 			"pressure": p1,
@@ -246,9 +243,6 @@ func GetOpcData(db *gorm.DB) gin.HandlerFunc {
 			"command_4": cmd4, "feedback_4": fb4,
 			"command_5": cmd5, "feedback_5": fb5,
 			"command_6": cmd6, "feedback_6": fb6,
-
-			"output":     out,
-			"hpu_active": hpu,
 		}
 
 		// User-defined sensors from Settings, keyed custom_1, custom_2, ...
@@ -257,71 +251,6 @@ func GetOpcData(db *gorm.DB) gin.HandlerFunc {
 		}
 
 		c.JSON(http.StatusOK, resp)
-	}
-}
-
-func writeBoolNode(db *gorm.DB, value bool) error {
-	var s models.Settings
-	db.First(&s, 1)
-
-	if s.OutputTriggerNodeID == "" {
-		return fmt.Errorf("output Node ID is not configured")
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	client, err := getPersistentClient(ctx, s)
-	if err != nil {
-		return err
-	}
-
-	id, err := ua.ParseNodeID(s.OutputTriggerNodeID)
-	if err != nil {
-		return fmt.Errorf("invalid Output Node ID format")
-	}
-
-	v, _ := ua.NewVariant(value)
-	req := &ua.WriteRequest{
-		NodesToWrite: []*ua.WriteValue{
-			{
-				NodeID:      id,
-				AttributeID: ua.AttributeIDValue,
-				Value: &ua.DataValue{
-					EncodingMask: ua.DataValueValue,
-					Value:        v,
-				},
-			},
-		},
-	}
-
-	res, err := client.Write(ctx, req)
-	if err != nil {
-		return err
-	}
-	if len(res.Results) == 0 || res.Results[0] != ua.StatusOK {
-		return fmt.Errorf("OPC UA write failed with status: %v", res.Results[0])
-	}
-	return nil
-}
-
-func StartOutput(db *gorm.DB) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		if err := writeBoolNode(db, true); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		c.JSON(http.StatusOK, gin.H{"status": "active"})
-	}
-}
-
-func StopOutput(db *gorm.DB) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		if err := writeBoolNode(db, false); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-		c.JSON(http.StatusOK, gin.H{"status": "stopped"})
 	}
 }
 
@@ -383,7 +312,6 @@ func GetOpcStatus(db *gorm.DB) gin.HandlerFunc {
 		status["feedback"] = checkNode(s.FeedbackNode1)
 		status["pressure"] = checkNode(s.PressureNode1)
 		status["flow"] = checkNode(s.FlowNode1)
-		status["output"] = checkNode(s.OutputTriggerNodeID)
 
 		c.JSON(http.StatusOK, status)
 	}

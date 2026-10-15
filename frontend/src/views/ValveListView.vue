@@ -14,7 +14,6 @@ import InputText from 'primevue/inputtext'
 import InputNumber from 'primevue/inputnumber'
 import ConfirmDialog from 'primevue/confirmdialog'
 import { useConfirm } from 'primevue/useconfirm'
-import Toast from 'primevue/toast'
 import { useToast } from 'primevue/usetoast'
 import IconField from 'primevue/iconfield'
 import InputIcon from 'primevue/inputicon'
@@ -165,7 +164,6 @@ onMounted(fetchValves)
 
 <template>
   <div class="valve-list-page">
-    <Toast />
     <ConfirmDialog />
 
     <header class="list-toolbar">
@@ -224,7 +222,7 @@ onMounted(fetchValves)
             <span>{{ data.command_type || 'Voltage' }}</span>
           </template>
         </Column>
-        <Column header="Actions" :exportable="false" style="min-width: 140px; text-align: right">
+        <Column header="Actions" :exportable="false" frozen alignFrozen="right" style="min-width: 140px; text-align: right">
           <template #body="{ data }">
             <div class="action-buttons">
               <Button icon="pi pi-eye" severity="secondary" text title="View Details" @click="viewDetail(data)" />
@@ -442,4 +440,27 @@ onMounted(fetchValves)
 .w-full {
   width: 100%;
 } 
-</style>
+@media (max-width: 1180px) {
+  .valve-table :deep(.p-datatable-thead > tr > th),
+  .valve-table :deep(.p-datatable-tbody > tr > td) {
+    padding: 0.5rem 0.5rem;
+  }
+  .valve-table :deep(th:not(.p-datatable-column-sorted) .p-datatable-sort-icon) {
+    display: none;
+  }
+}
+
+/* ~820 CSS px (1024x768 at 125% Windows scaling): smaller type so more of the
+   row fits before the table starts scrolling sideways. */
+@media (max-width: 900px) {
+  .valve-table :deep(.p-datatable-thead > tr > th),
+  .valve-table :deep(.p-datatable-tbody > tr > td) {
+    font-size: 0.78rem;
+    padding: 0.4rem 0.35rem;
+  }
+  .valve-table :deep(.mono-bold),
+  .valve-table :deep(.mono-val) {
+    font-size: 0.76rem;
+  }
+}
+</style>

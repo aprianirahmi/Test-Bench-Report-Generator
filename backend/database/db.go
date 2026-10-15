@@ -38,7 +38,7 @@ func ConnectDB() *gorm.DB {
 	// RepairJob must be migrated before TestRecord, which references it.
 	// TestRecord.valve_id changed from NOT NULL to nullable (manual tests have
 	// no valve); AutoMigrate rebuilds that table once, keeping its rows.
-	if err = db.AutoMigrate(&models.Valve{}, &models.User{}, &models.Settings{}, &models.RepairJob{}, &models.TestRecord{}); err != nil {
+	if err = db.AutoMigrate(&models.Valve{}, &models.User{}, &models.Settings{}, &models.RepairJob{}, &models.TestRecord{}, &models.RecordingDraft{}); err != nil {
 		log.Fatalf("Table migration failed: %v", err)
 	}
 

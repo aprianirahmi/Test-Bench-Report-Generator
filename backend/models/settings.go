@@ -8,6 +8,8 @@ type Settings struct {
 	OpcUaSecurityPolicy string `json:"security_policy"`
 	OpcUaSecurityMode   string `json:"security_mode"`
 
+	// Legacy: the app no longer writes an output trigger or reads an HPU status.
+	// The columns stay so existing databases and saved settings keep working.
 	OutputTriggerNodeID string `json:"output_trigger_node_id"`
 	HpuStatusNodeID     string `json:"hpu_status_node_id"`
 

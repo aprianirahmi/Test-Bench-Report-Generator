@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"fmt"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -214,12 +215,14 @@ func detectMimeType(fileHeader *multipart.FileHeader) (string, error) {
 	defer file.Close()
 
 	buffer := make([]byte, 512)
-	_, err = file.Read(buffer)
-	if err != nil {
+	n, err := file.Read(buffer)
+	if err != nil && err != io.EOF {
 		return "", err
 	}
 
-	return http.DetectContentType(buffer), nil
+	// Sniff only the bytes that were read, so a short file is not judged by
+	// trailing zeros. An empty file comes back as text/plain and is rejected.
+	return http.DetectContentType(buffer[:n]), nil
 }
 
 // SaveTestRecord stores one recorded session. New clients send either
@@ -235,6 +238,13 @@ func SaveTestRecord(db *gorm.DB) gin.HandlerFunc {
 		record.ID = 0
 		record.Valve = nil
 		record.RepairJob = nil
+		record.RecordedBy = c.GetString("username")
+		// Report fields are written by SaveRecordReport only.
+		record.ReportStatus = ""
+		record.ReportOperator = ""
+		record.ReportDocNumber = ""
+		record.ReportedBy = ""
+		record.ReportedAt = nil
 
 		switch record.TestMode {
 		case models.TestModeRepairJob:

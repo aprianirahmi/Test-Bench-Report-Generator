@@ -121,6 +121,20 @@ html, body, #app {
   overflow: hidden;
 }
 
+/* Smaller base type on compact screens (1024x768 industrial PCs, laptops at
+   125-150% scaling). Spacing and component sizes are rem based, so the whole
+   interface scales down together. Screen only: the A4 report keeps 16px. */
+@media screen and (max-width: 1180px), screen and (max-height: 800px) {
+  html {
+    font-size: 14px;
+  }
+}
+@media screen and (max-width: 900px), screen and (max-height: 680px) {
+  html {
+    font-size: 13px;
+  }
+}
+
 .brand-logo {
   width: 28px;
   height: 28px;

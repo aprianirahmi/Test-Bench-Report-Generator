@@ -1,12 +1,21 @@
 <script setup>
 import { computed } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
+import { storeToRefs } from 'pinia'
 import { useAuthStore } from '../stores/auth'
+import { useRecordingStore } from '../stores/recording'
 
 defineEmits(['toggle-sidebar'])
 
 const route = useRoute()
+const router = useRouter()
 const authStore = useAuthStore()
+
+// A recording keeps running on other pages; show it here so it is not forgotten.
+const rec = useRecordingStore()
+const { isRecording, sessionDialog, formattedClock, signalLost } = storeToRefs(rec)
+const awayFromRecords = computed(() => route.name !== 'records')
+const goToRecords = () => router.push({ name: 'records' })
 
 const roleLabel = computed(() => {
   const role = authStore.user?.role
@@ -17,6 +26,8 @@ const roleLabel = computed(() => {
 const pageTitle = computed(() => {
   switch (route.name) {
     case 'dashboard': return 'Dashboard'
+    case 'repair-job-details-search':
+    case 'repair-job-details': return 'Repair Job Details'
     case 'valve-list': return 'Valve Database'
     case 'valve-details-search':
     case 'valve-details': return 'Valve Details'
@@ -39,6 +50,26 @@ const pageTitle = computed(() => {
     </div>
 
     <div class="topbar-right">
+      <button
+        v-if="awayFromRecords && isRecording"
+        class="rec-pill"
+        :class="{ lost: signalLost }"
+        :title="signalLost ? 'Recording, but no sensor values are received (PLC connection lost). Open the Test Workspace.' : 'A recording is running. Open the Test Workspace.'"
+        @click="goToRecords"
+      >
+        <span class="rec-dot"></span>
+        REC {{ formattedClock }}
+        <template v-if="signalLost"> &middot; NO SIGNAL</template>
+      </button>
+      <button
+        v-else-if="awayFromRecords && sessionDialog"
+        class="rec-pill done"
+        title="The recording has finished. Open the Test Workspace to save or export it."
+        @click="goToRecords"
+      >
+        <i class="pi pi-check-circle"></i>
+        Recording finished, review
+      </button>
       <button class="icon-btn">
         <i class="pi pi-bell"></i>
       </button>
@@ -51,6 +82,44 @@ const pageTitle = computed(() => {
 </template>
 
 <style scoped>
+.rec-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.7rem;
+  border: 0;
+  border-radius: 999px;
+  background: #be090f;
+  color: #fff;
+  font-size: 0.78rem;
+  font-weight: 700;
+  font-family: Consolas, Monaco, monospace;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.rec-pill.lost {
+  background: #b45309;
+  animation: rec-alert 0.8s infinite alternate;
+}
+@keyframes rec-alert {
+  from { box-shadow: 0 0 0 0 rgba(180, 83, 9, 0.7); }
+  to { box-shadow: 0 0 0 6px rgba(180, 83, 9, 0); }
+}
+.rec-pill.done {
+  background: #007aa0;
+  font-family: inherit;
+}
+.rec-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #fff;
+  animation: rec-blink 1s infinite alternate;
+}
+@keyframes rec-blink {
+  from { opacity: 0.25; }
+  to { opacity: 1; }
+}
 .topbar {
   height: 64px;
   min-height: 64px;

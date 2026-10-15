@@ -87,39 +87,7 @@
         <section class="panel-card">
           <div class="card-title">
             <i class="pi pi-sliders-h"></i>
-            <span>System Triggers & Hydraulic Transducers</span>
-          </div>
-
-          <!-- Output Trigger -->
-          <div class="node-field-group">
-            <div class="field-meta">
-              <label>Output Trigger Node ID</label>
-              <span class="live-dot" :class="{ ok: isLiveNode('output_trigger') }"></span>
-            </div>
-            <div class="node-input-row">
-              <div class="live-pill">{{ liveValues.output_trigger ?? '-' }}</div>
-              <InputText
-                v-model="settings.output_trigger_node_id"
-                placeholder="ns=2;s=plc/app/Application/sym/PLC_PRG/output"
-                class="p-inputtext-sm node-input"
-              />
-            </div>
-          </div>
-
-          <!-- HPU Status -->
-          <div class="node-field-group">
-            <div class="field-meta">
-              <label>HPU Status Node ID</label>
-              <span class="live-dot" :class="{ ok: isLiveNode('hpu_status') }"></span>
-            </div>
-            <div class="node-input-row">
-              <div class="live-pill">{{ liveValues.hpu_status ?? '-' }}</div>
-              <InputText
-                v-model="settings.hpu_status_node_id"
-                placeholder="ns=2;s=plc/app/Application/sym/PLC_PRG/output"
-                class="p-inputtext-sm node-input"
-              />
-            </div>
+            <span>Hydraulic Transducers</span>
           </div>
 
           <!-- Pressure 1 & 2 -->
@@ -326,8 +294,6 @@ const isConnected = ref(false)
 let pollingTimer = null
 
 const liveValues = reactive({
-  output_trigger: "-",
-  hpu_status: "-",
   pressure_1: "-",
   pressure_2: "-",
   flow_1: "-",
@@ -425,9 +391,6 @@ async function pollLiveTelemetry() {
         const v = d[n.key]
         liveValues[n.key] = v != null && Number.isFinite(Number(v)) ? Number(v).toFixed(1) : v != null ? String(v) : "-"
       }
-
-      liveValues.output_trigger = d.output != null ? (d.output ? "TRUE" : "FALSE") : "-"
-      liveValues.hpu_status = d.hpu_active != null ? (d.hpu_active ? "ACTIVE" : "OFF") : "-"
     }
   } catch (e) {}
 }

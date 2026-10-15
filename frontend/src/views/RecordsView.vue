@@ -1,7 +1,9 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
-import api, { startOutput, stopOutput, fetchOpcData, fetchSensorCatalog } from "../services/api";
+import api, { fetchSensorCatalog } from "../services/api";
+import { storeToRefs } from "pinia";
+import { useRecordingStore } from "../stores/recording";
 import { useRepairJobStore } from "../stores/repairJob";
 import { useTheme } from "../composables/useTheme";
 import { DARK_CHART, LIGHT_CHART } from "../utils/chartTheme";
@@ -39,7 +41,6 @@ import {
 
 ChartJS.register(Title, Tooltip, Legend, LineElement, PointElement, LinearScale, CategoryScale, Filler);
 
-const STEPS = 40; // samples shown in the live charts (1 sample per second)
 const route = useRoute();
 const jobStore = useRepairJobStore();
 const toast = useToast();
@@ -68,12 +69,28 @@ const query = ref("");
 const suggestions = ref([]);
 const pendingJob = ref(null);
 
-const controlStatus = ref("stopped");
-const isRecording = ref(false);
-const isStarting = ref(false);
-const isStopping = ref(false);
-const recordedSession = ref([]);
-const recordingStartedAt = ref(null);
+// Live data, the recording and the finished session live in the recording
+// store, so a recording keeps running while another page is open.
+// plcStatus: "unknown" until the first poll answers, then "connected" or
+// "disconnected" (taken from the OPC UA data request).
+const rec = useRecordingStore();
+const {
+  plcStatus,
+  isRecording,
+  latest,
+  liveBuffer,
+  emptyStreak,
+  manualCmd7,
+  manualCmd8,
+  selectedDuration,
+  session,
+  sessionDialog,
+  sessionState,
+  confirmDiscard,
+  signalLost,
+  signalLostKind,
+  lostSeconds,
+} = storeToRefs(rec);
 
 // --- Sensors and chart layout ---
 const customSensors = ref([]);
@@ -117,14 +134,9 @@ watch(
 // Manual command inputs. Command 7 / Command 8 (0-1300 mA) are typed in by the
 // operator and are not read from OPC UA, so there is no feedback for them.
 const MANUAL_MAX_MA = 1300;
-const manualCmd7 = ref(null);
-const manualCmd8 = ref(null);
 const plotsCommand = (key) => visibleCharts.value.some((c) => c.x === key || c.y === key);
 
 // --- Live data ---
-let liveDataInterval = null;
-const liveBuffer = ref([]);
-const latest = ref({});
 
 const liveTiles = [
   { key: "pressure_1", label: "Pressure 1", unit: "bar" },
@@ -139,137 +151,90 @@ function tileValue(key) {
 }
 
 // --- Recording timer & dialogs ---
+// The timer is optional. 0 = no timer: the recording runs until Stop is pressed.
 const recordConfigDialog = ref(false);
 const durationOptions = [
+  { label: "No timer (until Stop)", value: 0 },
   { label: "1 Minute", value: 60 },
   { label: "5 Minutes", value: 300 },
   { label: "10 Minutes", value: 600 },
   { label: "30 Minutes", value: 1800 },
   { label: "60 Minutes", value: 3600 },
 ];
-const selectedDuration = ref(60);
-const remainingSeconds = ref(0);
-let countdownInterval = null;
-
-const formattedCountdown = computed(() => {
-  const m = Math.floor(remainingSeconds.value / 60);
-  const s = remainingSeconds.value % 60;
-  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+// Clock: counts down with a timer, up without one (kept in the recording store).
+const formattedCountdown = computed(() => rec.formattedClock);
+const timerButtonLabel = computed(() => {
+  if (isRecording.value) return formattedCountdown.value;
+  return selectedDuration.value ? `${selectedDuration.value / 60} min` : "Timer";
 });
+const timerButtonTitle = computed(() =>
+  selectedDuration.value
+    ? `Recording timer: ${selectedDuration.value / 60} min`
+    : "Recording timer: off (recording ends when Stop is pressed)",
+);
 
 // The finished session waits here until the operator decides what to do with
 // it: save it as an official record, download the raw PDF/CSV, or discard it.
-const session = ref(null); // { samples, charts, catalog, job, mode, startedAt, endedAt, reason }
-const sessionDialog = ref(false);
-const sessionState = ref({ saved: false, pdf: false, csv: false, saving: false });
-const confirmDiscard = ref(false);
+// session: { samples, charts, catalog, job, mode, startedAt, endedAt, reason, timer, withData }
 
 const sessionDuration = computed(() => {
   if (!session.value) return 0;
   return Math.max(0, Math.round((session.value.endedAt - session.value.startedAt) / 1000));
 });
+const formatTime = (iso) => new Date(iso).toLocaleTimeString("en-GB");
 const sessionHandled = computed(() => sessionState.value.saved || sessionState.value.pdf || sessionState.value.csv);
 
-const sliderTrackRef = ref(null);
-const slideOffset = ref(0);
-const isDragging = ref(false);
-let startX = 0;
-let maxSlide = 0;
-
-function handleRecButtonClick() {
-  if (isRecording.value) {
-    stopRecordingSession("manual");
-  } else {
-    resetSlider();
-    recordConfigDialog.value = true;
-  }
+function openTimerDialog() {
+  if (isRecording.value || sessionDialog.value) return;
+  recordConfigDialog.value = true;
 }
 
-function resetSlider() {
-  slideOffset.value = 0;
-  isDragging.value = false;
-}
-
-function onSlideStart(e) {
-  if (!sliderTrackRef.value) return;
-  isDragging.value = true;
-  const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-  startX = clientX - slideOffset.value;
-  maxSlide = sliderTrackRef.value.clientWidth - 52;
-}
-
-function onSlideMove(e) {
-  if (!isDragging.value) return;
-  const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-  let currentOffset = clientX - startX;
-  if (currentOffset < 0) currentOffset = 0;
-  if (currentOffset > maxSlide) currentOffset = maxSlide;
-  slideOffset.value = currentOffset;
-
-  if (maxSlide > 0 && currentOffset >= maxSlide * 0.9) {
-    isDragging.value = false;
-    slideOffset.value = maxSlide;
-    triggerStartRecord();
-  }
-}
-
-function onSlideEnd() {
-  if (!isDragging.value) return;
-  isDragging.value = false;
-  if (slideOffset.value < maxSlide * 0.9) slideOffset.value = 0;
-}
-
-function triggerStartRecord() {
-  if (sessionDialog.value) return;
+function startRecording() {
+  if (!canOperate.value || isRecording.value || sessionDialog.value) return;
   recordConfigDialog.value = false;
-  isRecording.value = true;
-  recordedSession.value = [];
-  recordingStartedAt.value = new Date();
-  remainingSeconds.value = selectedDuration.value;
-
+  rec.setContext({ charts: visibleCharts.value, catalog: catalog.value });
+  rec.start({ job: job.value, mode: testMode.value });
+  warnedNoData = false;
+  if (noSensorData.value) warnNoData();
   toast.add({
     severity: "success",
     summary: "Recording Started",
-    detail: `Logging session for ${selectedDuration.value / 60} minute(s).`,
-    life: 3000,
+    detail: rec.activeDuration
+      ? `Logging session for ${rec.activeDuration / 60} minute(s). It keeps running if you open another page.`
+      : "Logging until Stop is pressed. It keeps running if you open another page.",
+    life: 3500,
   });
-
-  if (countdownInterval) clearInterval(countdownInterval);
-  countdownInterval = setInterval(() => {
-    remainingSeconds.value--;
-    if (remainingSeconds.value <= 0) {
-      clearInterval(countdownInterval);
-      stopRecordingSession("timer");
-    }
-  }, 1000);
 }
 
-// reason: "manual" (Rec button), "hpu" (Stop button), "timer" (duration reached)
+// reason: "manual" (Stop button), "timer" (duration reached), "limit" (4 h cap without a timer)
 function stopRecordingSession(reason) {
-  if (!isRecording.value) return;
-  isRecording.value = false;
-  if (countdownInterval) clearInterval(countdownInterval);
-
-  const samples = recordedSession.value.slice();
-  if (!samples.length) {
-    toast.add({ severity: "warn", summary: "Recording Stopped", detail: "No samples were captured.", life: 3000 });
-    return;
-  }
-
-  session.value = {
-    samples,
-    charts: visibleCharts.value.map((c) => ({ ...c })),
-    catalog: catalog.value.map((s) => ({ key: s.key, label: s.label, unit: s.unit, group: s.group })),
-    job: job.value ? { ...job.value } : null,
-    mode: testMode.value,
-    startedAt: recordingStartedAt.value || new Date(),
-    endedAt: new Date(),
-    reason,
-  };
-  sessionState.value = { saved: false, pdf: false, csv: false, saving: false };
-  confirmDiscard.value = false;
-  sessionDialog.value = true;
+  rec.stop(reason);
+  showNotice();
 }
+
+// Messages raised by the store (also while this page was closed).
+function showNotice() {
+  const n = rec.takeNotice();
+  if (n) toast.add({ ...n, life: 6000 });
+}
+
+// No sensor value at all for a few seconds although the PLC answers: the
+// Node IDs in Settings are most likely wrong (e.g. missing "ns=2;s=").
+const noSensorData = computed(() => plcStatus.value === "connected" && emptyStreak.value >= 3);
+let warnedNoData = false;
+function warnNoData() {
+  if (warnedNoData) return;
+  warnedNoData = true;
+  toast.add({
+    severity: "warn",
+    summary: "No Sensor Data",
+    detail: "Recording, but no sensor values are being received. Check the OPC UA Node IDs in Settings.",
+    life: 8000,
+  });
+}
+watch(noSensorData, (v) => {
+  if (v && isRecording.value) warnNoData();
+});
 
 async function saveSessionAsRecord() {
   const s = session.value;
@@ -282,6 +247,10 @@ async function saveSessionAsRecord() {
     sample_interval_ms: 1000,
     charts: s.charts,
     sensors: s.catalog,
+    // Periods in which no sensor value was received (PLC lost). The samples
+    // of these periods are empty; the report notes them.
+    gaps: s.gaps || [],
+    signal_lost_seconds: s.lostSeconds || 0,
   };
   const body = {
     test_mode: s.mode,
@@ -293,6 +262,7 @@ async function saveSessionAsRecord() {
   try {
     await api.post("/records", body);
     sessionState.value.saved = true;
+    rec.clearDraft();
     toast.add({
       severity: "success",
       summary: "Record Saved",
@@ -355,11 +325,14 @@ function closeSessionDialog() {
     confirmDiscard.value = true;
     return;
   }
+  // Saved or exported: the autosave is no longer needed.
+  if (sessionHandled.value) rec.clearDraft();
   sessionDialog.value = false;
   confirmDiscard.value = false;
 }
 
 function discardSession() {
+  rec.clearDraft();
   session.value = null;
   sessionDialog.value = false;
   confirmDiscard.value = false;
@@ -442,79 +415,14 @@ function confirmLoadJob() {
   });
 }
 
-async function startValve() {
-  if (!canOperate.value || isStarting.value) return;
-  isStarting.value = true;
-  try {
-    await startOutput();
-    controlStatus.value = "active";
-    toast.add({ severity: "success", summary: "HPU Active", detail: "Output signal engaged.", life: 3000 });
-  } catch (error) {
-    // Show the backend's reason (e.g. the OPC UA status) so the operator can tell
-    // a wrong Node ID or a read-only node from a lost connection.
-    const reason = error.response?.data?.error || error.message || "";
-    toast.add({
-      severity: "error",
-      summary: "Start Failed",
-      detail: reason ? `Failed to engage HPU: ${reason}` : "Failed to engage HPU.",
-      life: 8000,
-    });
-  } finally {
-    isStarting.value = false;
-  }
-}
-
-async function stopValve() {
-  if (isStopping.value) return;
-  isStopping.value = true;
-  try {
-    await stopOutput();
-    controlStatus.value = "stopped";
-    if (isRecording.value) stopRecordingSession("hpu");
-    toast.add({ severity: "warn", summary: "HPU Stopped", detail: "Output signal disengaged.", life: 3000 });
-  } catch (error) {
-    const reason = error.response?.data?.error || error.message || "";
-    toast.add({
-      severity: "error",
-      summary: "Stop Failed",
-      detail: reason ? `Failed to disengage HPU: ${reason}` : "Failed to disengage HPU.",
-      life: 8000,
-    });
-  } finally {
-    isStopping.value = false;
-  }
-}
-
-async function pollLiveData() {
-  const now = new Date();
-  const timeStr = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}:${String(now.getSeconds()).padStart(2, "0")}`;
-
-  let d = {};
-  let ok = false;
-  try {
-    const res = await fetchOpcData();
-    d = res.data || {};
-    ok = true;
-  } catch (e) {}
-  if (ok) trackSensors(d);
-
-  // One sample holds every sensor, so any X/Y pair can be drawn now or later
-  // in the report. Unconfigured nodes come back as null and stay null.
-  const sample = { time: timeStr, ts: now.toISOString() };
-  for (const s of catalog.value) {
-    if (s.key === "command_7" || s.key === "command_8") continue;
-    sample[s.key] = toNumberOrNull(d[s.key]);
-  }
-  sample.command_7 = toNumberOrNull(manualCmd7.value);
-  sample.command_8 = toNumberOrNull(manualCmd8.value);
-
-  latest.value = sample;
-  const buf = liveBuffer.value.slice(-(STEPS - 1));
-  buf.push(sample);
-  liveBuffer.value = buf;
-
-  if (isRecording.value) recordedSession.value.push(sample);
-}
+// Publish the chart layout and sensor list to the store: every sample and the
+// finished session use them, also when the recording ends on another page.
+watch(
+  [visibleCharts, catalog],
+  () => rec.setContext({ charts: visibleCharts.value, catalog: catalog.value }),
+  { immediate: true, deep: true },
+);
+watch(() => rec.notice, (n) => n && showNotice());
 
 // Live chart bindings, one per visible chart
 const liveCharts = computed(() =>
@@ -539,6 +447,7 @@ function resetLayout() {
 
 const imageUrl = computed(() => assetUrl(job.value?.image_path));
 
+let offData = null;
 onMounted(async () => {
   await Promise.all([loadJobs(), loadCustomSensors()]);
   const targetId = Number(route.query.job);
@@ -550,25 +459,19 @@ onMounted(async () => {
     }
   }
   if (jobStore.selectedJob) query.value = jobStore.selectedJob;
-  liveDataInterval = setInterval(pollLiveData, 1000);
+  offData = rec.onData(trackSensors);
+  rec.attach();
+  showNotice();
   lastCatalogRefresh = Date.now();
   catalogInterval = setInterval(() => refreshCustomSensors(true), CATALOG_REFRESH_MS);
   window.addEventListener("focus", onWindowFocus);
-  window.addEventListener("mousemove", onSlideMove);
-  window.addEventListener("mouseup", onSlideEnd);
-  window.addEventListener("touchmove", onSlideMove);
-  window.addEventListener("touchend", onSlideEnd);
 });
 
 onBeforeUnmount(() => {
-  if (liveDataInterval) clearInterval(liveDataInterval);
-  if (countdownInterval) clearInterval(countdownInterval);
+  rec.detach();
+  if (offData) offData();
   if (catalogInterval) clearInterval(catalogInterval);
   window.removeEventListener("focus", onWindowFocus);
-  window.removeEventListener("mousemove", onSlideMove);
-  window.removeEventListener("mouseup", onSlideEnd);
-  window.removeEventListener("touchmove", onSlideMove);
-  window.removeEventListener("touchend", onSlideEnd);
 });
 </script>
 
@@ -618,9 +521,26 @@ onBeforeUnmount(() => {
           <span>REC: {{ formattedCountdown }}</span>
         </div>
 
-        <div class="hpu-badge" :class="controlStatus">
+        <div
+          v-if="isRecording && signalLost"
+          class="signal-lost-badge"
+          title="The recording continues, but no sensor values are received. The gap is noted in the record."
+        >
+          <i class="pi pi-exclamation-circle"></i>
+          <span>{{ signalLostKind === "plc_offline" ? "PLC LOST" : "NO SIGNAL" }} &middot; {{ lostSeconds }} s empty</span>
+        </div>
+        <router-link
+          v-if="noSensorData && !signalLost"
+          to="/settings"
+          class="data-warn-badge"
+          title="The PLC answers but no sensor value is received. Check the OPC UA Node IDs in Settings (they must start with ns=2;s=)."
+        >
+          <i class="pi pi-exclamation-triangle"></i>
+          <span>NO SENSOR DATA</span>
+        </router-link>
+        <div class="plc-badge" :class="plcStatus" title="OPC UA connection to the PLC">
           <span class="pulse-dot"></span>
-          <span>HPU: {{ controlStatus.toUpperCase() }}</span>
+          <span>PLC: {{ plcStatus.toUpperCase() }}</span>
         </div>
         <div v-for="t in liveTiles" :key="t.key" class="live-value-item">
           <span class="label">{{ t.label }}</span>
@@ -638,26 +558,25 @@ onBeforeUnmount(() => {
             icon="pi pi-play"
             severity="success"
             class="ctrl-btn start-btn"
-            :loading="isStarting"
-            :disabled="!canOperate || isStarting || controlStatus === 'active'"
-            @click="startValve"
+            :disabled="!canOperate || isRecording || sessionDialog"
+            @click="startRecording"
           />
           <Button
             label="Stop"
-            icon="pi pi-power-off"
+            icon="pi pi-stop"
             severity="danger"
             class="ctrl-btn"
-            :loading="isStopping"
-            :disabled="isStopping || controlStatus === 'stopped'"
-            @click="stopValve"
+            :disabled="!isRecording"
+            @click="stopRecordingSession('manual')"
           />
           <Button
-            :label="isRecording ? formattedCountdown : 'Rec'"
-            :icon="isRecording ? 'pi pi-stop-circle' : 'pi pi-circle-fill'"
+            :label="timerButtonLabel"
+            icon="pi pi-clock"
             :severity="isRecording ? 'warn' : 'secondary'"
-            class="ctrl-btn"
-            :disabled="!canOperate || sessionDialog"
-            @click="handleRecButtonClick"
+            class="ctrl-btn timer-btn"
+            :title="timerButtonTitle"
+            :disabled="sessionDialog"
+            @click="openTimerDialog"
           />
         </section>
 
@@ -814,17 +733,17 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <!-- MODAL 1: Recording Duration & Slide to Confirm -->
+    <!-- MODAL 1: Recording timer (optional) -->
     <Dialog
       :visible="recordConfigDialog"
       @update:visible="recordConfigDialog = $event"
-      header="Configure Recording Timer"
+      header="Recording Timer"
       :modal="true"
-      :style="{ width: '28rem' }"
+      :style="{ width: '26rem' }"
     >
       <div class="rec-config-body">
         <div class="field">
-          <label>Target Duration</label>
+          <label>Recording Duration</label>
           <Dropdown
             v-model="selectedDuration"
             :options="durationOptions"
@@ -832,29 +751,24 @@ onBeforeUnmount(() => {
             optionValue="value"
             class="w-full"
           />
-        </div>
-
-        <div class="slide-confirm-container">
-          <div ref="sliderTrackRef" class="slider-track">
-            <div class="slider-fill" :style="{ width: `${slideOffset + 26}px` }"></div>
-            <span class="slider-text">Slide to Start Recording &rarr;</span>
-            <div
-              class="slider-thumb"
-              :style="{ transform: `translateX(${slideOffset}px)` }"
-              @mousedown="onSlideStart"
-              @touchstart="onSlideStart"
-            >
-              <i class="pi pi-angle-double-right"></i>
-            </div>
-          </div>
+          <small class="timer-hint">
+            {{
+              selectedDuration
+                ? "Recording stops automatically when the timer ends. Stop ends it earlier."
+                : "No timer: recording runs until Stop is pressed (stops by itself after 4 h)."
+            }}
+          </small>
         </div>
       </div>
+      <template #footer>
+        <Button label="OK" icon="pi pi-check" @click="recordConfigDialog = false" />
+      </template>
     </Dialog>
 
     <!-- MODAL 2: Recording finished, choose what to keep -->
     <Dialog
       :visible="sessionDialog"
-      header="Recording Finished"
+      :header="session?.reason === 'recovered' ? 'Recording Recovered' : 'Recording Finished'"
       :modal="true"
       :closable="false"
       :style="{ width: '32rem' }"
@@ -866,11 +780,22 @@ onBeforeUnmount(() => {
             <h4>{{ session.samples.length }} samples captured</h4>
             <p>
               {{ formatDateTime(session.startedAt) }} &middot; {{ sessionDuration }} s
-              <template v-if="session.reason === 'hpu'"> &middot; stopped by HPU Stop</template>
-              <template v-else-if="session.reason === 'manual'"> &middot; stopped early</template>
+              <template v-if="session.reason === 'limit'"> &middot; stopped at the 4 h limit</template>
+              <template v-else-if="session.reason === 'manual' && session.timer"> &middot; stopped early</template>
+              <template v-else-if="session.reason === 'recovered'"> &middot; app was closed during recording, data up to the last autosave</template>
             </p>
             <p class="session-ref">
               {{ session.job ? `${session.job.job_number} — ${session.job.job_name}` : "Manual testing (no reference)" }}
+            </p>
+            <p v-if="session.gaps && session.gaps.length && session.withData > 0" class="session-warn">
+              <i class="pi pi-exclamation-triangle"></i>
+              Signal lost {{ session.gaps.length }}x, {{ session.lostSeconds }} s without sensor values
+              ({{ session.gaps.map((g) => formatTime(g.from)).join(", ") }}). These samples are empty; the report will note it.
+            </p>
+            <p v-if="session.withData === 0" class="session-warn">
+              <i class="pi pi-exclamation-triangle"></i>
+              No sensor values were received during this recording, so charts and verification will be empty.
+              Check the OPC UA Node IDs in Settings, then record again.
             </p>
           </div>
         </div>
@@ -1010,7 +935,54 @@ onBeforeUnmount(() => {
   from { opacity: 0.2; }
   to { opacity: 1; }
 }
-.hpu-badge {
+.signal-lost-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.7rem;
+  border-radius: 999px;
+  background: #b45309;
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 700;
+  white-space: nowrap;
+  animation: signal-pulse 0.8s infinite alternate;
+}
+@keyframes signal-pulse {
+  from { opacity: 1; }
+  to { opacity: 0.6; }
+}
+.data-warn-badge {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.6rem;
+  border-radius: 4px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  font-family: Consolas, Monaco, monospace;
+  background: rgba(245, 158, 11, 0.16);
+  color: #92400e;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.p-dark .data-warn-badge {
+  background: rgba(245, 158, 11, 0.22);
+  color: #fcd34d;
+}
+.session-warn {
+  margin-top: 0.5rem;
+  padding: 0.45rem 0.6rem;
+  border-radius: 6px;
+  background: rgba(245, 158, 11, 0.14);
+  color: #92400e;
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+.p-dark .session-warn {
+  color: #fcd34d;
+}
+.plc-badge {
   display: flex;
   align-items: center;
   gap: 0.4rem;
@@ -1020,22 +992,29 @@ onBeforeUnmount(() => {
   font-weight: 700;
   font-family: Consolas, Monaco, monospace;
 }
-/* Status badges: Rexroth palette. Cyan/teal = running, red = stopped */
-.hpu-badge.active {
+/* Status badges: Rexroth palette. Cyan/teal = connected, red = disconnected */
+.plc-badge.connected {
   background: rgba(0, 200, 247, 0.16);
   color: #007aa0;
 }
-.hpu-badge.stopped {
+.plc-badge.disconnected {
   background: rgba(237, 0, 7, 0.1);
   color: #be090f;
 }
-.p-dark .hpu-badge.active {
+.plc-badge.unknown {
+  background: rgba(0, 43, 73, 0.08);
+  color: var(--text-muted);
+}
+.p-dark .plc-badge.connected {
   background: rgba(0, 200, 247, 0.18);
   color: #91f0ff;
 }
-.p-dark .hpu-badge.stopped {
+.p-dark .plc-badge.disconnected {
   background: rgba(237, 0, 7, 0.22);
   color: #ff6a6e;
+}
+.p-dark .plc-badge.unknown {
+  background: rgba(255, 255, 255, 0.08);
 }
 
 /* Start is the only green button in the app. Every other button
@@ -1302,7 +1281,7 @@ onBeforeUnmount(() => {
   width: 100%;
 }
 
-/* Slide to Confirm Styles */
+/* Recording timer dialog */
 .rec-config-body {
   display: flex;
   flex-direction: column;
@@ -1319,62 +1298,9 @@ onBeforeUnmount(() => {
   font-weight: 600;
   color: var(--text-muted);
 }
-.slide-confirm-container {
-  margin-top: 0.5rem;
-}
-.slider-track {
-  position: relative;
-  width: 100%;
-  height: 52px;
-  background: rgba(0, 43, 73, 0.08);
-  border: 1px solid var(--border-color);
-  border-radius: 30px;
-  overflow: hidden;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  user-select: none;
-}
-.p-dark .slider-track {
-  background: rgba(255, 255, 255, 0.05);
-}
-.slider-fill {
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  background: rgba(0, 204, 255, 0.25);
-  pointer-events: none;
-}
-.slider-text {
-  font-size: 0.8rem;
-  font-weight: 600;
+.timer-hint {
+  font-size: 0.75rem;
   color: var(--text-muted);
-  pointer-events: none;
-  z-index: 1;
-}
-.slider-thumb {
-  position: absolute;
-  left: 0;
-  top: 0;
-  width: 52px;
-  height: 50px;
-  background: var(--primary-color);
-  color: #fff;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: grab;
-  z-index: 2;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
-  transition: transform 0.05s ease-out;
-}
-.slider-thumb:active {
-  cursor: grabbing;
-}
-.slider-thumb i {
-  font-size: 1.1rem;
 }
 
 /* Completion Dialog Styles */
@@ -1535,4 +1461,208 @@ onBeforeUnmount(() => {
 .p-dark .discard-warning {
   color: #ff8a8d;
 }
-</style>
+/* ------------------------------------------------------------------
+   Layout for industrial PCs (1024x768 and similar). Rules here keep every
+   control inside its card and the left column free of scrolling.
+   ------------------------------------------------------------------ */
+
+/* The grid row is capped to the space that is left, so the left column can
+   never push the page taller than the window. */
+.wireframe-grid {
+  grid-template-rows: minmax(0, 1fr);
+}
+.sidebar-column > .panel {
+  flex-shrink: 0;
+}
+.picture-panel {
+  flex: 1 1 0;
+}
+
+/* Each chart card measures its own width, so the axis pickers adapt to the
+   card (which depends on window size, sidebar state and the 1-4 layout). */
+.graph-panel {
+  container-type: inline-size;
+  container-name: chartcard;
+}
+.chart-header .axis-pickers {
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-wrap: nowrap;
+}
+.chart-header .axis-dropdown.header-dropdown {
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: 200px;
+  width: auto;
+}
+.axis-dropdown :deep(.p-select-label) {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 26px;
+}
+.chart-header .swap-btn {
+  flex-shrink: 0;
+}
+
+/* Medium card: title on its own line, Y and X side by side below it. */
+@container chartcard (max-width: 470px) {
+  .chart-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.2rem;
+    padding: 0.3rem 0.6rem;
+  }
+  .axis-pickers {
+    width: 100%;
+    justify-content: space-between;
+    gap: 0.25rem;
+  }
+  .chart-header .axis-dropdown.header-dropdown {
+    max-width: none;
+  }
+  .axis-label {
+    margin-left: 0;
+  }
+}
+
+/* Narrow card: Y above X, swap button beside them. */
+@container chartcard (max-width: 420px) {
+  .axis-pickers {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    column-gap: 0.3rem;
+    row-gap: 0.2rem;
+    align-items: center;
+  }
+  .axis-pickers > :nth-child(1) { grid-column: 1; grid-row: 1; }
+  .axis-pickers > :nth-child(2) { grid-column: 2; grid-row: 1; }
+  .axis-pickers > :nth-child(3) { grid-column: 1; grid-row: 2; }
+  .axis-pickers > :nth-child(4) { grid-column: 2; grid-row: 2; }
+  .axis-pickers > :nth-child(5) { grid-column: 3; grid-row: 1 / span 2; align-self: center; }
+}
+
+@media (max-width: 1180px) {
+  .search-toolbar {
+    flex-wrap: wrap;
+    row-gap: 0.4rem;
+    padding: 0.4rem 0.7rem;
+  }
+  .search-section {
+    max-width: none;
+    flex: 1 1 100%;
+  }
+  .live-values-section {
+    flex: 1 1 100%;
+    justify-content: space-between;
+    gap: 0.6rem;
+  }
+  .live-value-item {
+    min-width: 0;
+  }
+  .wireframe-grid {
+    grid-template-columns: 250px minmax(0, 1fr);
+  }
+  .info-row {
+    gap: 0.5rem;
+  }
+  .info-label {
+    flex-shrink: 0;
+  }
+  .info-val {
+    min-width: 0;
+    text-align: right;
+    overflow-wrap: anywhere;
+    font-size: 0.8rem;
+  }
+}
+@media (max-width: 900px) {
+  .wireframe-grid {
+    grid-template-columns: 230px minmax(0, 1fr);
+  }
+  .charts-toolbar {
+    flex-wrap: wrap;
+    row-gap: 0.3rem;
+  }
+  .toolbar-hint {
+    flex: 1 1 100%;
+    margin-left: 0;
+  }
+}
+
+/* Short screens: tighter spacing so the left column fits without scrolling
+   (the Valve Preview takes whatever height is left over). */
+@media (max-height: 800px) {
+  .records-page,
+  .wireframe-grid,
+  .sidebar-column,
+  .charts-area,
+  .charts-grid {
+    gap: 0.55rem;
+  }
+  .control-panel {
+    padding: 0.4rem;
+  }
+  .ctrl-btn {
+    padding: 0.3rem 0;
+  }
+  .manual-header {
+    padding: 0.25rem 0.65rem;
+  }
+  .manual-body {
+    padding: 0.35rem 0.6rem 0.45rem;
+    gap: 0.4rem;
+  }
+  .manual-field {
+    padding: 0.1rem 0.2rem;
+    gap: 0.1rem;
+  }
+  .manual-field :deep(.p-inputnumber-input) {
+    padding: 0.2rem 0.4rem;
+  }
+  .picture-panel {
+    min-height: 64px;
+  }
+  .picture-content {
+    padding: 0.3rem;
+  }
+  .info-panel {
+    padding: 0.5rem 0.7rem;
+    gap: 0.3rem;
+  }
+  .info-row {
+    padding-bottom: 0.15rem;
+  }
+  .info-label {
+    font-size: 0.7rem;
+  }
+  .info-val {
+    font-size: 0.78rem;
+  }
+  .panel-header {
+    padding: 0.25rem 0.65rem;
+  }
+  .search-toolbar {
+    padding: 0.3rem 0.6rem;
+  }
+  .charts-toolbar {
+    padding: 0.2rem 0.6rem;
+  }
+  .chart-container {
+    padding: 0.2rem 0.4rem 0;
+  }
+}
+@media (max-height: 680px) {
+  .picture-panel {
+    min-height: 44px;
+  }
+  .image-placeholder i {
+    display: none;
+  }
+  .manual-range {
+    display: none;
+  }
+}
+</style>

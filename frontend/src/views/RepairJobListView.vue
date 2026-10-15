@@ -4,7 +4,8 @@ import { useRouter } from "vue-router";
 import api, { uploadRepairJobImage, uploadRepairJobDatasheet } from "../services/api";
 import { FilterMatchMode } from "@primevue/core/api";
 import { useAuthStore } from "../stores/auth";
-import { assetUrl, formatDate, fromIsoDate, toIsoDate } from "../utils/format";
+import { formatDate, fromIsoDate, toIsoDate } from "../utils/format";
+import { checkImageFile, checkPdfFile } from "../utils/fileType";
 
 import DataTable from "primevue/datatable";
 import Column from "primevue/column";
@@ -15,7 +16,6 @@ import InputNumber from "primevue/inputnumber";
 import DatePicker from "primevue/datepicker";
 import ConfirmDialog from "primevue/confirmdialog";
 import { useConfirm } from "primevue/useconfirm";
-import Toast from "primevue/toast";
 import { useToast } from "primevue/usetoast";
 import IconField from "primevue/iconfield";
 import InputIcon from "primevue/inputicon";
@@ -35,6 +35,8 @@ const filters = ref({
 const dialogVisible = ref(false);
 const selectedFile = ref(null);
 const selectedDatasheetFile = ref(null);
+const imageUploadRef = ref(null);
+const datasheetUploadRef = ref(null);
 const editingId = ref(null);
 const isSaving = ref(false);
 
@@ -91,6 +93,34 @@ async function fetchJobs() {
   }
 }
 
+// Check the file content right after it is picked, so a wrong file is caught
+// before the job is saved. A rejected file is cleared from the picker.
+async function onImagePicked(e) {
+  const file = e.files?.[0] || null;
+  selectedFile.value = null;
+  if (!file) return;
+  const problem = await checkImageFile(file);
+  if (problem) {
+    imageUploadRef.value?.clear();
+    toast.add({ severity: "warn", summary: "Image not accepted", detail: problem, life: 7000 });
+    return;
+  }
+  selectedFile.value = file;
+}
+
+async function onDatasheetPicked(e) {
+  const file = e.files?.[0] || null;
+  selectedDatasheetFile.value = null;
+  if (!file) return;
+  const problem = await checkPdfFile(file);
+  if (problem) {
+    datasheetUploadRef.value?.clear();
+    toast.add({ severity: "warn", summary: "Datasheet not accepted", detail: problem, life: 7000 });
+    return;
+  }
+  selectedDatasheetFile.value = file;
+}
+
 function resetDialogState() {
   Object.keys(errors).forEach((key) => delete errors[key]);
   selectedFile.value = null;
@@ -119,11 +149,6 @@ function goToTest(job) {
   router.push({ name: "records", query: { job: job.id } });
 }
 
-function openDatasheet(job) {
-  const url = assetUrl(job.datasheet_path);
-  if (url) window.open(url, "_blank", "noopener");
-}
-
 async function handleSubmit() {
   if (!validateForm()) {
     toast.add({ severity: "warn", summary: "Incomplete Form", detail: "Please fill in all mandatory fields.", life: 3000 });
@@ -139,21 +164,55 @@ async function handleSubmit() {
     } else {
       const response = await api.post("/repair-jobs", payload);
       jobId = response.data.id;
+      // From here on the job exists. Pressing Save again must update it, never
+      // create a second job with the same number.
+      editingId.value = jobId;
     }
-
-    if (selectedFile.value) await uploadRepairJobImage(jobId, selectedFile.value);
-    if (selectedDatasheetFile.value) await uploadRepairJobDatasheet(jobId, selectedDatasheetFile.value);
-
-    toast.add({ severity: "success", summary: "Success", detail: "Repair job saved.", life: 3000 });
-    dialogVisible.value = false;
-    await fetchJobs();
   } catch (error) {
     console.error("Save error:", error);
     const msg = error.response?.data?.error || "Failed to save repair job.";
     toast.add({ severity: "error", summary: "Error", detail: msg, life: 4000 });
-  } finally {
     isSaving.value = false;
+    return;
   }
+
+  // Files go up after the job is saved. A failed file does not undo the job:
+  // the dialog stays open in edit mode so the operator can fix just that file.
+  const failed = [];
+  if (selectedFile.value) {
+    try {
+      await uploadRepairJobImage(editingId.value, selectedFile.value);
+      selectedFile.value = null;
+    } catch (error) {
+      failed.push(`Image: ${error.response?.data?.error || "upload failed"}`);
+      selectedFile.value = null;
+      imageUploadRef.value?.clear();
+    }
+  }
+  if (selectedDatasheetFile.value) {
+    try {
+      await uploadRepairJobDatasheet(editingId.value, selectedDatasheetFile.value);
+      selectedDatasheetFile.value = null;
+    } catch (error) {
+      failed.push(`Datasheet: ${error.response?.data?.error || "upload failed"}`);
+      selectedDatasheetFile.value = null;
+      datasheetUploadRef.value?.clear();
+    }
+  }
+
+  await fetchJobs();
+  isSaving.value = false;
+  if (failed.length) {
+    toast.add({
+      severity: "warn",
+      summary: "Saved, but a file was not uploaded",
+      detail: `${failed.join(" | ")}. The job is saved. Select the file again and press Save.`,
+      life: 9000,
+    });
+    return;
+  }
+  toast.add({ severity: "success", summary: "Success", detail: "Repair job saved.", life: 3000 });
+  dialogVisible.value = false;
 }
 
 function confirmDelete(job) {
@@ -183,7 +242,6 @@ onMounted(fetchJobs);
 
 <template>
   <div class="job-list-page">
-    <Toast />
     <ConfirmDialog />
 
     <header class="list-toolbar">
@@ -217,21 +275,21 @@ onMounted(fetchJobs);
         <template #empty>
           <div class="empty-row">No repair jobs yet. Use "Add Repair Job" to create one.</div>
         </template>
-        <Column field="job_number" header="Job Number" sortable style="min-width: 120px">
+        <Column field="job_number" header="Job Number" sortable style="min-width: 135px">
           <template #body="{ data }">
             <span class="mono-bold">{{ data.job_number }}</span>
           </template>
         </Column>
-        <Column field="job_name" header="Job Name" sortable style="min-width: 150px" />
-        <Column field="so_number" header="SO Number" sortable style="min-width: 110px" />
+        <Column field="job_name" header="Job Name" sortable style="min-width: 140px" />
+        <Column field="so_number" header="SO Number" sortable style="min-width: 100px" />
         <Column field="job_date" header="Date" sortable style="min-width: 100px">
           <template #body="{ data }">
             <span>{{ formatDate(data.job_date) }}</span>
           </template>
         </Column>
-        <Column field="customer" header="Customer" sortable style="min-width: 140px" />
-        <Column field="valve_type" header="Valve Type" sortable style="min-width: 110px" />
-        <Column field="serial_number" header="Serial Number" sortable style="min-width: 120px">
+        <Column field="customer" header="Customer" sortable style="min-width: 130px" />
+        <Column field="valve_type" header="Valve Type" sortable style="min-width: 100px" />
+        <Column field="serial_number" header="Serial Number" sortable style="min-width: 130px">
           <template #body="{ data }">
             <span class="mono-val">{{ data.serial_number || "-" }}</span>
           </template>
@@ -241,17 +299,16 @@ onMounted(fetchJobs);
             <span class="mono-val">{{ data.max_pressure }} <small>bar</small></span>
           </template>
         </Column>
-        <Column header="Actions" :exportable="false" style="min-width: 160px; text-align: right">
+        <Column header="Actions" :exportable="false" frozen alignFrozen="right" style="min-width: 160px; text-align: right">
           <template #body="{ data }">
             <div class="action-buttons">
               <Button icon="pi pi-chart-line" severity="info" text title="Test in Workspace" @click="goToTest(data)" />
               <Button
-                icon="pi pi-file-pdf"
+                icon="pi pi-eye"
                 severity="secondary"
                 text
-                title="View Datasheet"
-                :disabled="!data.datasheet_path"
-                @click="openDatasheet(data)"
+                title="Details"
+                @click="router.push({ name: 'repair-job-details', params: { id: data.id } })"
               />
               <Button icon="pi pi-pencil" severity="secondary" text title="Edit" @click="openEditDialog(data)" />
               <Button v-if="authStore.isAdmin" icon="pi pi-trash" severity="danger" text title="Delete" @click="confirmDelete(data)" />
@@ -368,26 +425,28 @@ onMounted(fetchJobs);
           <div class="field upload-field">
             <label>Valve Image (PNG/JPG)</label>
             <FileUpload
+              ref="imageUploadRef"
               mode="basic"
-              accept="image/*"
+              accept="image/png,image/jpeg,image/webp"
               :maxFileSize="2000000"
               chooseLabel="Select Photo"
               :auto="false"
               customUpload
-              @select="(e) => (selectedFile = e.files[0])"
+              @select="onImagePicked"
             />
           </div>
 
           <div class="field upload-field">
             <label>Datasheet Document (PDF)</label>
             <FileUpload
+              ref="datasheetUploadRef"
               mode="basic"
               accept="application/pdf"
               :maxFileSize="5000000"
               chooseLabel="Select PDF"
               :auto="false"
               customUpload
-              @select="(e) => (selectedDatasheetFile = e.files[0])"
+              @select="onDatasheetPicked"
             />
           </div>
         </fieldset>
@@ -520,5 +579,48 @@ onMounted(fetchJobs);
 }
 .w-full {
   width: 100%;
+}
+.mono-bold,
+.mono-val {
+  white-space: nowrap;
+}
+/* 1024x768 industrial PCs: tighter cells so more columns fit. The Actions
+   column is frozen to the right edge, so edit/delete never scroll away. */
+@media (max-width: 1180px) {
+  .job-table :deep(.p-datatable-thead > tr > th),
+  .job-table :deep(.p-datatable-tbody > tr > td) {
+    padding: 0.5rem 0.5rem;
+    min-width: 0 !important;
+  }
+  /* sort arrows only on the active column; clicking a header still sorts */
+  .job-table :deep(th:not(.p-datatable-column-sorted) .p-datatable-sort-icon) {
+    display: none;
+  }
+  .job-table :deep(.action-buttons .p-button) {
+    width: 2rem;
+    height: 2rem;
+    padding: 0;
+  }
+  .job-table :deep(.p-datatable-thead > tr > th:last-child),
+  .job-table :deep(.p-datatable-tbody > tr > td:last-child) {
+    min-width: 128px !important;
+  }
+  .search-field {
+    width: 300px;
+  }
+}
+
+/* ~820 CSS px (1024x768 at 125% Windows scaling): smaller type so more of the
+   row fits before the table starts scrolling sideways. */
+@media (max-width: 900px) {
+  .job-table :deep(.p-datatable-thead > tr > th),
+  .job-table :deep(.p-datatable-tbody > tr > td) {
+    font-size: 0.78rem;
+    padding: 0.4rem 0.35rem;
+  }
+  .job-table :deep(.mono-bold),
+  .job-table :deep(.mono-val) {
+    font-size: 0.76rem;
+  }
 }
 </style>

@@ -66,4 +66,27 @@ type TestRecord struct {
 	CreatedAt   time.Time  `json:"created_at"`
 	DataPayload string     `json:"data_payload"`
 	Meta        string     `json:"meta"`
+
+	// Who recorded the session (set by the server from the login).
+	RecordedBy string `json:"recorded_by"`
+
+	// Outcome of the report, written when the report is generated: final
+	// status (OK, NOK, CALIBRATION), operator name and document number. Empty
+	// until a report has been generated for the record.
+	ReportStatus    string     `json:"report_status"`
+	ReportOperator  string     `json:"report_operator"`
+	ReportDocNumber string     `json:"report_doc_number"`
+	ReportedBy      string     `json:"reported_by"`
+	ReportedAt      *time.Time `json:"reported_at"`
+}
+
+// RecordingDraft is the unsaved recording of one user, written every few
+// seconds while a recording runs so that a closed app or a power cut does not
+// lose it. Payload is the session as JSON. It is deleted once the session is
+// saved as a TestRecord or discarded.
+type RecordingDraft struct {
+	ID        uint      `json:"id" gorm:"primarykey"`
+	UserID    uint      `json:"user_id" gorm:"uniqueIndex"`
+	Payload   string    `json:"payload"`
+	UpdatedAt time.Time `json:"updated_at"`
 }

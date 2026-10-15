@@ -1,0 +1,43 @@
+PAKET IPC - VALVE DATABASE / TEST BENCH REPORT GENERATOR
+Dibuat {TANGGAL} | commit {COMMIT} | PT Tekno Fluida Indonesia | Internal
+
+ISI FOLDER
+  ValveDatabase.exe   Aplikasi (satu file, tanpa instalasi)
+  .env                Password admin, password operator, JWT_SECRET (acak, dibuat khusus paket ini)
+  images\             Gambar valve (kosong)
+  datasheets\         Datasheet valve (kosong)
+  data.db             TIDAK ada. Dibuat otomatis saat pertama dijalankan (database kosong).
+  client_cert.pem / client_key.pem  TIDAK ada. Dibuat otomatis saat pertama tersambung ke OPC UA.
+
+LANGKAH DI IPC
+1. Ekstrak dan salin folder ke lokasi yang bisa ditulis, mis. C:\ValveDatabase\ (bukan Program Files).
+2. Pastikan WebView2 Runtime terpasang (Windows 11 umumnya sudah). Jika jendela tidak muncul, pasang WebView2 Runtime (installer offline dari Microsoft).
+3. Pastikan IPC satu jaringan dengan ctrlX CORE:
+     ping <IP ctrlX>
+     Test-NetConnection <IP ctrlX> -Port 4840
+4. Jalankan ValveDatabase.exe (satu salinan saja). Jika SmartScreen muncul: More info > Run anyway.
+5. Login admin. Password ada di file .env (buka dengan Notepad).
+   Catatan: password hanya dibaca saat akun dibuat pertama kali. Mengubah .env setelah database terbentuk tidak mengubah password akun yang sudah ada.
+6. Settings: isi Endpoint OPC UA (opc.tcp://<IP ctrlX>:4840), Security Policy/Mode, dan Node ID
+   (Pressure 1/2, Flow 1/2, Oil Temperature, Command/Feedback 1-6, custom sensor). Klik Save Settings.
+   Node ID harus bentuk penuh, mis. ns=2;s=plc/app/Application/sym/...  Tanpa awalan ns=2;s= nilainya tampil "-".
+   Node ID kosong = sensor tidak dipakai (tidak ada nilai di rekaman).
+7. Pill di Settings harus menjadi "Connected". Jika ditolak, tambahkan client_cert.pem (dibuat di folder ini) ke daftar sertifikat tepercaya di ctrlX CORE.
+
+UJI SEBELUM DIPAKAI
+- Records: badge PLC di kanan atas harus "PLC: CONNECTED" (dari koneksi OPC UA). Pressure, Flow, Oil Temp tampil dan bergerak (bukan "-").
+  Bila muncul chip NO SENSOR DATA, semua Node ID di Settings belum terbaca: periksa awalan ns=2;s= dan tipe node (harus angka tunggal).
+- Rekam: pilih job, Timer 1 menit (atau "No timer" lalu akhiri dengan Stop, batas aman 4 jam), Start, Save as Record, buka di Generate Report.
+  Pindah ke halaman lain saat merekam: rekaman tetap berjalan, pill REC tampil di topbar.
+- Repair Job: tambah job dengan gambar (PNG/JPG/WebP) dan datasheet (PDF), lalu buka Open PDF Datasheet (tampil di jendela aplikasi).
+- Uji langsung di IPC: Download Raw Data PDF, Export CSV, dan Generate PDF Report (cetak). Belum pernah diuji di WebView2 pada IPC ini.
+- Record hanya bernilai bila rekaman dibuat setelah Node ID terbaca. Record lama yang kosong tetap kosong.
+- Penjagaan data: saat merekam, cabut kabel jaringan PLC sebentar. Peringatan PLC LOST/NO SIGNAL harus muncul lalu hilang saat tersambung lagi.
+  Tutup aplikasi saat merekam lalu buka lagi: dialog "Unsaved recording found" harus muncul (Recover/Discard).
+- Generate Report: operator dan status wajib diisi (tanpa nilai bawaan). Setelah dicetak, buka Record yang sama lagi: status, operator, nomor dokumen tetap.
+- Hapus Record (hanya admin): tombol tempat sampah di Repair Job Details (tab Test Records) dan di Generate Report. Tidak bisa dibatalkan.
+
+OPERASIONAL
+- Auto-start: pintasan ValveDatabase.exe di shell:startup, atau Task Scheduler (At log on).
+- Backup: salin data.db, images\, datasheets\ (tutup aplikasi dulu agar konsisten).
+- Update versi: tutup aplikasi, timpa ValveDatabase.exe saja. Jangan timpa data.db dan .env.

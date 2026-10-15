@@ -183,27 +183,29 @@ func UploadRepairJobImage(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		file, err := c.FormFile("image")
+		name, data, err := readUpload(c, "image", maxImageBytes)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "image file not found"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
 
-		ext := strings.ToLower(filepath.Ext(file.Filename))
+		ext := strings.ToLower(filepath.Ext(name))
 		allowedExts := map[string]bool{".jpg": true, ".jpeg": true, ".png": true, ".webp": true}
 		if !allowedExts[ext] {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "file type not allowed, use JPG, PNG or WEBP"})
 			return
 		}
-		mimeType, err := detectMimeType(file)
-		if err != nil || (mimeType != "image/jpeg" && mimeType != "image/png" && mimeType != "image/webp") {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid MIME type"})
+		mimeType := sniffBytes(data)
+		if mimeType != "image/jpeg" && mimeType != "image/png" && mimeType != "image/webp" {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": fmt.Sprintf("invalid image: the file content is %s, not JPG, PNG or WEBP", describeContent(mimeType, len(data))),
+			})
 			return
 		}
 
 		newFileName := fmt.Sprintf("job_%d_%d%s", j.ID, time.Now().UnixNano(), ext)
-		newPath := filepath.Join("images", newFileName)
-		if err := c.SaveUploadedFile(file, newPath); err != nil {
+		newPath, err := saveUpload("images", newFileName, data)
+		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save file"})
 			return
 		}
@@ -229,24 +231,26 @@ func UploadRepairJobDatasheet(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		file, err := c.FormFile("datasheet")
+		name, data, err := readUpload(c, "datasheet", maxDatasheetBytes)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "datasheet file not found"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		if strings.ToLower(filepath.Ext(file.Filename)) != ".pdf" {
+		if strings.ToLower(filepath.Ext(name)) != ".pdf" {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "file must be a PDF"})
 			return
 		}
-		mimeType, err := detectMimeType(file)
-		if err != nil || mimeType != "application/pdf" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "file is not a valid PDF"})
+		mimeType := sniffBytes(data)
+		if mimeType != "application/pdf" {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": fmt.Sprintf("file is not a valid PDF: the file content is %s", describeContent(mimeType, len(data))),
+			})
 			return
 		}
 
 		newFileName := fmt.Sprintf("job_%d_%d.pdf", j.ID, time.Now().UnixNano())
-		newPath := filepath.Join("datasheets", newFileName)
-		if err := c.SaveUploadedFile(file, newPath); err != nil {
+		newPath, err := saveUpload("datasheets", newFileName, data)
+		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save file"})
 			return
 		}
